@@ -104,4 +104,4 @@ streamlit run app.py
 
 Bhavna Sharma · bhavnasharma.1404@gmail.com · [GitHub](https://github.com/bhavna1434)
 
-Built as a quantitative finance portfolio project, May–July 2026.
+Built as a quantitative finance portfolio project, May-June 2026.
