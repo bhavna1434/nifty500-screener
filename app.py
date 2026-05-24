@@ -377,6 +377,71 @@ with tab1:
             with st.expander(f"⚠️ {len(excluded_df)} stocks excluded — insufficient factor data"):
                 st.dataframe(excluded_df, use_container_width=True, hide_index=True)
 
+        # ── Sector Concentration ──────────────────────────────────────────────
+        st.divider()
+        st.subheader("Sector Concentration")
+
+        _sc_ndf = st.session_state.get("nifty_df", pd.DataFrame())
+        _sc_sector_lu = (
+            dict(zip(_sc_ndf["Symbol"], _sc_ndf["Industry"]))
+            if not _sc_ndf.empty else {}
+        )
+
+        # Final picks = rows that passed the technical filter
+        _sc_tickers = display_df_full["ticker"].head(int(top_n)).tolist()
+        _sc_sectors  = [_sc_sector_lu.get(t, "Unknown") for t in _sc_tickers]
+        _sc_counts   = (
+            pd.Series(_sc_sectors, name="Sector")
+            .value_counts()
+            .reset_index()
+        )
+        _sc_counts.columns = ["Sector", "Count"]
+
+        # ── Metrics row ───────────────────────────────────────────────────────
+        _sc_total_sectors  = len(_sc_counts)
+        _sc_top_sector     = _sc_counts.iloc[0]["Sector"]
+        _sc_top_count      = int(_sc_counts.iloc[0]["Count"])
+        _sc_top_pct        = _sc_top_count / len(_sc_tickers) * 100 if _sc_tickers else 0
+
+        _mc1, _mc2, _mc3 = st.columns(3)
+        _mc1.metric("Sectors represented", _sc_total_sectors)
+        _mc2.metric("Most concentrated", f"{_sc_top_sector} ({_sc_top_count})")
+        _mc3.metric("Largest sector weight", f"{_sc_top_pct:.0f}%")
+
+        # ── Concentration warning ─────────────────────────────────────────────
+        if _sc_top_count > 3:
+            st.warning(
+                f"⚠️ High concentration: {_sc_top_count} of your {len(_sc_tickers)} "
+                f"picks are from **{_sc_top_sector}**. Consider this sector risk."
+            )
+
+        # ── Bar chart ─────────────────────────────────────────────────────────
+        import plotly.express as px
+        _sc_fig = px.bar(
+            _sc_counts,
+            x="Sector", y="Count",
+            text="Count",
+            color="Count",
+            color_continuous_scale=[[0, "#c8daf5"], [1, "#378ADD"]],
+            labels={"Count": "Stocks", "Sector": ""},
+        )
+        _sc_fig.update_traces(textposition="outside")
+        _sc_fig.update_layout(
+            height=320,
+            showlegend=False,
+            coloraxis_showscale=False,
+            plot_bgcolor="white",
+            paper_bgcolor="white",
+            margin=dict(t=20, b=60, l=0, r=0),
+            yaxis=dict(title="Stocks", gridcolor="#f0f0f0", dtick=1),
+            xaxis=dict(tickangle=-30),
+        )
+        st.plotly_chart(_sc_fig, use_container_width=True)
+
+        # ── Summary caption line ──────────────────────────────────────────────
+        _sc_parts = [f"{row['Sector']} ({row['Count']})" for _, row in _sc_counts.iterrows()]
+        st.caption("Sectors: " + " · ".join(_sc_parts))
+
     st.divider()
     st.subheader("Download Tearsheets")
     st.caption("One-page PDF summary for each stock that passed all 4 stages.")
