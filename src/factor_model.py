@@ -287,12 +287,34 @@ def rank_stocks(
         surprise_z = pd.Series(0.0, index=universe)
 
     # ── Build composite score for each stock ──────────────────────────────────
+    # Use None (not 0.0) as sentinel for missing factor data so we can count gaps.
+    # Surprise is intentionally 0.0 when not provided — not counted as missing.
+    excluded = []
+
     for ticker in universe:
-        vs = float(value_z.get(ticker, 0.0))
-        gs = float(growth_z.get(ticker, 0.0))
-        qs = float(quality_z.get(ticker, 0.0))
-        ms = float(momentum_z.get(ticker, 0.0))
-        ss = float(surprise_z.get(ticker, 0.0))
+        vs = value_z.get(ticker)     # None = no fundamental data
+        gs = growth_z.get(ticker)    # None = no CAGR data
+        qs = quality_z.get(ticker)   # None = no ROE/ROCE data
+        ms = momentum_z.get(ticker)  # None = insufficient price history
+        ss = surprise_z.get(ticker, 0.0)  # always has a value
+
+        missing = [name for name, val in
+                   [("value", vs), ("growth", gs), ("quality", qs), ("momentum", ms)]
+                   if val is None]
+
+        if len(missing) >= 2:
+            excluded.append({
+                "ticker":          ticker,
+                "missing_factors": ", ".join(missing),
+                "missing_count":   len(missing),
+            })
+            continue
+
+        # Replace any single missing factor with 0.0 (cross-sectional neutral)
+        vs = vs if vs is not None else 0.0
+        gs = gs if gs is not None else 0.0
+        qs = qs if qs is not None else 0.0
+        ms = ms if ms is not None else 0.0
 
         composite = (
             w["value"]    * vs +
@@ -320,7 +342,11 @@ def rank_stocks(
     )
     ranked.insert(0, "rank", range(1, len(ranked) + 1))
 
-    return ranked
+    excluded_df = pd.DataFrame(excluded) if excluded else pd.DataFrame(
+        columns=["ticker", "missing_factors", "missing_count"]
+    )
+
+    return ranked, excluded_df
 
 
 # ── Quick test ────────────────────────────────────────────────────────────────

@@ -30,7 +30,7 @@ def compute_rsi(prices: pd.Series, window: int = 14) -> float:
     Returns:
         Latest RSI value (float)
     """
-    rsi_series = ta.momentum.RSIIndicator(close=prices, window=window).rsi()
+    rsi_series = ta.momentum.RSIIndicator(close=prices.squeeze(), window=window).rsi()
     return rsi_series.iloc[-1]
 
 
@@ -77,9 +77,9 @@ def apply_green_flag_filter(top_stocks: list, price_df: pd.DataFrame) -> pd.Data
         above_ma50 = current_price >= ma50
         pct_from_high = compute_52w_proximity(prices)
 
-        # Check all Green-Flag conditions
+        # RSI must be strictly below 70 — at or above 70 means overbought
         passes = (
-            rsi <= TECH_RULES["rsi_max"]
+            rsi < TECH_RULES["rsi_max"]
             and above_ma50
             and pct_from_high <= TECH_RULES["pct_from_52w_high_max"]
         )

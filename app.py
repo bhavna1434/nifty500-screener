@@ -185,16 +185,19 @@ if run_clicked and weights:
         # ── Stage 3: factor model ranking ─────────────────────────────────────
         if passing:
             with st.spinner(f"Stage 3: Ranking {len(passing)} stocks by factor model…"):
-                ranked_df = rank_stocks(
+                ranked_df, excluded_df = rank_stocks(
                     universe=passing,
                     price_df=raw,
                     fundamentals_df=fundamentals_df,
                     surprise_scores=surprise_scores,
                     weights=weights,
                 )
+            if not excluded_df.empty:
+                st.toast(f"{len(excluded_df)} stocks excluded — insufficient factor data")
             top_n_tickers = ranked_df["ticker"].head(int(top_n)).tolist()
         else:
-            ranked_df     = pd.DataFrame()
+            ranked_df    = pd.DataFrame()
+            excluded_df  = pd.DataFrame()
             top_n_tickers = []
 
         # ── Stage 4: technical green-flag filter ──────────────────────────────
@@ -215,6 +218,7 @@ if run_clicked and weights:
 
         # Persist in session state
         st.session_state["ranked_df"]      = ranked_df
+        st.session_state["excluded_df"]    = excluded_df
         st.session_state["tech_df"]        = tech_df
         st.session_state["final_picks"]    = final_picks
         st.session_state["passing_count"]  = len(passing)
@@ -290,20 +294,27 @@ tab1, tab2, tab3, tab4 = st.tabs([
 # ── TAB 1: Ranked Stocks ─────────────────────────────────────────────────────
 with tab1:
     st.subheader("Top Ranked Stocks")
-    st.caption("Sorted by composite factor score. Green rows passed the technical filter.")
+    st.caption("Only stocks that passed all 4 stages are shown (RSI < 70, above MA50, within 20% of 52w high).")
 
-    ranked_df = st.session_state.get("ranked_df", None)
+    ranked_df   = st.session_state.get("ranked_df", None)
+    excluded_df = st.session_state.get("excluded_df", pd.DataFrame())
 
     if ranked_df is None or ranked_df.empty:
         st.info("Click **▶ Run Screener** in the sidebar to load real data.")
     else:
+        # Only show stocks that passed the Stage 4 technical filter
+        if "passes" in ranked_df.columns:
+            display_df_full = ranked_df[ranked_df["passes"] == True].copy()
+        else:
+            display_df_full = ranked_df.copy()
+
         display_cols = ["rank", "ticker", "composite_score",
                         "value_score", "growth_score", "quality_score",
                         "momentum_score", "surprise_score"]
-        if "rsi" in ranked_df.columns:
-            display_cols += ["rsi", "above_ma50", "pct_from_52w_high", "passes"]
+        if "rsi" in display_df_full.columns:
+            display_cols += ["rsi", "above_ma50", "pct_from_52w_high"]
 
-        display_df = ranked_df[display_cols].head(int(top_n)).copy()
+        display_df = display_df_full[display_cols].head(int(top_n)).copy()
         display_df.columns = [c.replace("_score", "").replace("_", " ").title()
                                for c in display_df.columns]
 
@@ -315,10 +326,16 @@ with tab1:
                 "Composite": st.column_config.ProgressColumn(
                     "Composite Score", min_value=-3, max_value=3, format="%.2f"
                 ),
-                "Passes": st.column_config.CheckboxColumn("Tech ✅"),
             }
         )
-        st.caption(f"Showing top {min(int(top_n), len(ranked_df))} of {len(ranked_df)} ranked stocks.")
+        st.caption(
+            f"Showing {len(display_df)} stocks that passed all 4 stages "
+            f"(out of {len(ranked_df)} ranked)."
+        )
+
+        if not excluded_df.empty:
+            with st.expander(f"⚠️ {len(excluded_df)} stocks excluded — insufficient factor data"):
+                st.dataframe(excluded_df, use_container_width=True, hide_index=True)
 
     st.divider()
     st.subheader("Download Tearsheets")
