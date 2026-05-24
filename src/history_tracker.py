@@ -282,6 +282,124 @@ def render_history_section(current_df: pd.DataFrame):
         st.dataframe(runs, use_container_width=True)
 
 
+# ══════════════════════════════════════════════════════════════════════════════
+# CSV PERSISTENCE — survives Streamlit Cloud ephemeral filesystem restarts
+# ══════════════════════════════════════════════════════════════════════════════
+
+CSV_PATH = "data/screener_history.csv"
+
+# Columns exported to / imported from CSV
+_CSV_COLS = [
+    "run_date", "regime", "universe_size",
+    "ticker", "rank", "composite_score",
+    "value_score", "growth_score", "quality_score",
+    "momentum_score", "surprise_score",
+]
+
+
+def export_history_to_csv():
+    """
+    Dump the full SQLite history to data/screener_history.csv.
+
+    Called after every save_run() so the CSV always reflects the latest state.
+    The CSV is committed to git, giving history a free persistent store that
+    survives Streamlit Cloud's ephemeral filesystem across restarts.
+    """
+    if not os.path.exists(DB_PATH):
+        return
+
+    conn = sqlite3.connect(DB_PATH)
+    df = pd.read_sql_query("""
+        SELECT
+            sr.run_date,
+            sr.regime,
+            sr.n_stocks_universe  AS universe_size,
+            ts.ticker,
+            ts.rank,
+            ts.composite_score,
+            ts.value_score,
+            ts.growth_score,
+            ts.quality_score,
+            ts.momentum_score,
+            ts.surprise_score
+        FROM top_stocks ts
+        JOIN screener_runs sr ON ts.run_id = sr.run_id
+        ORDER BY sr.run_date DESC, ts.rank ASC
+    """, conn)
+    conn.close()
+
+    os.makedirs("data", exist_ok=True)
+    df.to_csv(CSV_PATH, index=False)
+    print(f"  History exported: {len(df)} rows -> {CSV_PATH}")
+
+
+def import_history_from_csv():
+    """
+    Seed the SQLite database from data/screener_history.csv on startup.
+
+    Only runs when:
+      - The CSV file exists (committed to git / uploaded)
+      - The screener_runs table is empty (fresh DB after a cloud restart)
+
+    This is idempotent: if the DB already has data it does nothing.
+    """
+    init_database()
+
+    if not os.path.exists(CSV_PATH):
+        return
+
+    conn = sqlite3.connect(DB_PATH)
+    existing = pd.read_sql_query("SELECT COUNT(*) AS n FROM screener_runs", conn).iloc[0]["n"]
+    if existing > 0:
+        conn.close()
+        return  # DB already populated — nothing to do
+
+    df = pd.read_csv(CSV_PATH)
+    if df.empty:
+        conn.close()
+        return
+
+    cursor = conn.cursor()
+    imported_runs = 0
+    imported_stocks = 0
+
+    for run_date, group in df.groupby("run_date", sort=False):
+        regime = group["regime"].iloc[0]
+        universe_size = int(group["universe_size"].iloc[0])
+        n_passed = len(group)
+
+        cursor.execute("""
+            INSERT INTO screener_runs (run_date, regime, n_stocks_universe, n_stocks_passed)
+            VALUES (?, ?, ?, ?)
+        """, (run_date, regime, universe_size, n_passed))
+        run_id = cursor.lastrowid
+
+        for _, row in group.iterrows():
+            cursor.execute("""
+                INSERT INTO top_stocks
+                    (run_id, ticker, rank, composite_score,
+                     value_score, growth_score, quality_score,
+                     momentum_score, surprise_score)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                run_id,
+                row.get("ticker"),
+                row.get("rank"),
+                row.get("composite_score"),
+                row.get("value_score"),
+                row.get("growth_score"),
+                row.get("quality_score"),
+                row.get("momentum_score"),
+                row.get("surprise_score"),
+            ))
+            imported_stocks += 1
+        imported_runs += 1
+
+    conn.commit()
+    conn.close()
+    print(f"  History imported from CSV: {imported_runs} runs, {imported_stocks} stock rows")
+
+
 # ── Quick test ────────────────────────────────────────────────────────────────
 if __name__ == "__main__":
     init_database()

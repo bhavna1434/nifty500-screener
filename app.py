@@ -19,7 +19,10 @@ from src.regime_detector import get_current_regime
 from src.fundamental_filter import apply_red_flag_filter, fetch_fundamentals
 from src.factor_model import rank_stocks
 from src.technical_filter import apply_green_flag_filter
-from src.history_tracker import init_database, save_run, render_history_section, get_stock_history
+from src.history_tracker import (
+    init_database, save_run, render_history_section, get_stock_history,
+    import_history_from_csv, export_history_to_csv,
+)
 from src.pdf_export import generate_tearsheet
 from src.visualizations import (
     plot_correlation_heatmap,
@@ -31,6 +34,7 @@ from src.visualizations import (
 from src.backtesting import run_momentum_backtest, plot_backtest_results
 
 init_database()
+import_history_from_csv()   # re-seed SQLite from CSV after cloud restarts
 
 CACHE_PATH   = Path("data/fundamentals_cache.csv")
 CACHE_MAX_AGE_DAYS = 7
@@ -237,13 +241,14 @@ if run_clicked and weights:
         st.session_state["fundamentals_df"] = fundamentals_df
         st.session_state["nifty_df"]        = nifty_df
 
-        # Save run to history database
+        # Save run to history database, then flush to CSV for git persistence
         if not ranked_df.empty:
             save_run(
                 ranked_df=ranked_df,
                 regime=st.session_state.get("regime", "Neutral"),
                 n_universe=len(all_tickers),
             )
+            export_history_to_csv()
 
     st.success(f"Done! {len(final_picks)} stocks passed all 4 stages.")
 
