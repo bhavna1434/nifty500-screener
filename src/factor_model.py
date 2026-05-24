@@ -2,11 +2,14 @@
 # Stage 3: Yellow-Flag Factor Ranking
 #
 # Ranks stocks on 5 factors using cross-sectional z-score normalization:
-#   1. Value      — P/E + EV/EBITDA (lower is better → sign is flipped)
-#   2. Growth     — Revenue CAGR + EPS CAGR (higher is better)
-#   3. Quality    — ROE + ROCE (higher is better)
-#   4. Momentum   — 6M price return, skipping most recent month (higher is better)
-#   5. Earnings Surprise — PEAD signal (higher surprise % is better)
+#   1. Value        — P/E + EV/EBITDA (lower is better → sign is flipped)
+#   2. Growth       — Revenue CAGR + EPS CAGR (higher is better)
+#   3. Quality      — ROE + ROCE (higher is better)
+#   4. Momentum     — 6M price return, skipping most recent month (higher is better)
+#   5. EPS Momentum — quarter-over-quarter EPS growth, z-scored
+#                     Note: labelled "earnings surprise" in early versions.
+#                     True PEAD requires analyst consensus estimates; we use
+#                     QoQ EPS change as a proxy.
 #
 # Why cross-sectional z-scoring? See 02_THEORY_DEEP_DIVE.md Section 7.
 # Short: all factors live on different scales; z-scoring puts them on the
@@ -19,11 +22,11 @@ from src.utils import z_score, cagr, pct_change_n_months
 
 # ── Default factor weights (sum to 1.0) ───────────────────────────────────────
 DEFAULT_WEIGHTS = {
-    "value":    0.20,
-    "growth":   0.20,
-    "quality":  0.20,
-    "momentum": 0.20,
-    "surprise": 0.20,
+    "value":        0.20,
+    "growth":       0.20,
+    "quality":      0.20,
+    "momentum":     0.20,
+    "eps_momentum": 0.20,
 }
 
 
@@ -227,16 +230,17 @@ def rank_stocks(
         fundamentals_df: Fundamental data DataFrame with columns:
                          ticker, pe_ratio, ev_ebitda, roe, roce,
                          revenue_cagr_3y, eps_cagr_3y
-        surprise_scores: Optional pd.Series of PEAD z-scores (from earnings_surprise.py)
-                         If None, earnings surprise factor is set to 0 for all stocks.
+        surprise_scores: Optional pd.Series of QoQ EPS momentum z-scores
+                         (from earnings_surprise.py). If None, eps_momentum
+                         factor is set to 0 for all stocks.
         weights:         Optional dict overriding DEFAULT_WEIGHTS.
-                         Must contain: value, growth, quality, momentum, surprise.
+                         Must contain: value, growth, quality, momentum, eps_momentum.
                          Values must sum to 1.0.
 
     Returns:
         DataFrame sorted by rank (rank=1 is best), with columns:
         ticker, rank, composite_score, value_score, growth_score,
-        quality_score, momentum_score, surprise_score
+        quality_score, momentum_score, eps_momentum_score
     """
     w = weights if weights else DEFAULT_WEIGHTS
 
@@ -280,7 +284,7 @@ def rank_stocks(
         print(f"  Warning: Growth factor failed: {e}")
         growth_z = pd.Series(0.0, index=fund_sub["ticker"].tolist())
 
-    # Earnings surprise — optional; default to 0 if not provided
+    # EPS momentum — optional; default to 0 if not provided
     if surprise_scores is not None:
         surprise_z = surprise_scores.reindex(universe).fillna(0.0)
     else:
@@ -288,7 +292,7 @@ def rank_stocks(
 
     # ── Build composite score for each stock ──────────────────────────────────
     # Use None (not 0.0) as sentinel for missing factor data so we can count gaps.
-    # Surprise is intentionally 0.0 when not provided — not counted as missing.
+    # EPS momentum is intentionally 0.0 when not provided — not counted as missing.
     excluded = []
 
     for ticker in universe:
@@ -317,21 +321,21 @@ def rank_stocks(
         ms = ms if ms is not None else 0.0
 
         composite = (
-            w["value"]    * vs +
-            w["growth"]   * gs +
-            w["quality"]  * qs +
-            w["momentum"] * ms +
-            w["surprise"] * ss
+            w["value"]        * vs +
+            w["growth"]       * gs +
+            w["quality"]      * qs +
+            w["momentum"]     * ms +
+            w["eps_momentum"] * ss
         )
 
         results.append({
-            "ticker":          ticker,
-            "composite_score": round(composite, 4),
-            "value_score":     round(vs, 4),
-            "growth_score":    round(gs, 4),
-            "quality_score":   round(qs, 4),
-            "momentum_score":  round(ms, 4),
-            "surprise_score":  round(ss, 4),
+            "ticker":             ticker,
+            "composite_score":    round(composite, 4),
+            "value_score":        round(vs, 4),
+            "growth_score":       round(gs, 4),
+            "quality_score":      round(qs, 4),
+            "momentum_score":     round(ms, 4),
+            "eps_momentum_score": round(ss, 4),
         })
 
     # ── Sort by composite score descending, assign rank ───────────────────────

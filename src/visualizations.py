@@ -86,12 +86,12 @@ def plot_factor_attribution(ranked_df: pd.DataFrame, top_n: int = 15) -> go.Figu
 
     This is the single most impressive visualization for Modulor — it shows
     exactly WHY each stock ranked highly (e.g. "RELIANCE is high because of
-    strong momentum and earnings surprise, not value").
+    strong momentum and EPS momentum, not value").
 
     Args:
         ranked_df: DataFrame with columns:
             ticker, value_score, growth_score, quality_score,
-            momentum_score, surprise_score (all z-scored)
+            momentum_score, eps_momentum_score (all z-scored)
         top_n: How many top stocks to show
 
     Returns:
@@ -100,8 +100,8 @@ def plot_factor_attribution(ranked_df: pd.DataFrame, top_n: int = 15) -> go.Figu
     df = ranked_df.head(top_n).copy()
 
     factor_cols = ["value_score", "growth_score", "quality_score",
-                   "momentum_score", "surprise_score"]
-    labels = ["Value", "Growth", "Quality", "Momentum", "Earnings Surprise"]
+                   "momentum_score", "eps_momentum_score"]
+    labels = ["Value", "Growth", "Quality", "Momentum", "EPS Momentum"]
     colors = ["#378ADD", "#1D9E75", "#7F77DD", "#BA7517", "#D85A30"]
 
     fig = go.Figure()
@@ -245,19 +245,19 @@ def plot_factor_radar(ticker: str, scores: dict) -> go.Figure:
 
     Args:
         ticker: Stock symbol
-        scores: dict with keys value, growth, quality, momentum, surprise
+        scores: dict with keys value, growth, quality, momentum, eps_momentum
                 (z-scores — values typically between -3 and +3)
 
     Returns:
         Plotly Figure (radar chart)
     """
-    categories = ["Value", "Growth", "Quality", "Momentum", "Earnings\nSurprise"]
+    categories = ["Value", "Growth", "Quality", "Momentum", "EPS\nMomentum"]
     values = [
         scores.get("value", 0),
         scores.get("growth", 0),
         scores.get("quality", 0),
         scores.get("momentum", 0),
-        scores.get("surprise", 0),
+        scores.get("eps_momentum", 0),
     ]
     # Close the radar loop
     values_loop = values + [values[0]]

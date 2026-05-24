@@ -1,19 +1,27 @@
 # src/earnings_surprise.py
-# Stage 3 (Advanced): Earnings Surprise Factor — Post-Earnings Announcement Drift (PEAD)
+# Stage 3 (Advanced): EPS Momentum Factor — Quarter-over-Quarter EPS Growth
 #
-# The key idea: when a company beats analyst EPS estimates, the stock tends to
-# keep drifting UPWARD for 30–60 days after the announcement. This is one of
-# the most robust and academically well-documented anomalies in finance.
+# WHAT THIS ACTUALLY MEASURES:
+#   Quarter-over-quarter EPS change: (latest_quarter_EPS - prev_quarter_EPS) / |prev|
+#   This is EPS momentum, not true earnings surprise.
 #
-# This is EXACTLY the signal at the core of Modulor Capital's Sentiment strategy.
+# WHY IT IS NOT TRUE PEAD EARNINGS SURPRISE:
+#   True Post-Earnings Announcement Drift (PEAD) requires analyst consensus EPS
+#   estimates to compute: surprise = (actual - consensus) / |consensus|
+#   Analyst estimates are not freely available — they require paid data
+#   (Bloomberg, Refinitiv, Trendlyne Pro).
 #
-# How we use it:
-#   - Compute earnings surprise % = (actual EPS - estimated EPS) / |estimated EPS|
-#   - Z-score it across all stocks in the universe
-#   - Add it as the 5th factor (20% weight) in the composite score
+#   Using prev-quarter EPS as a "proxy estimate" measures sequential EPS growth,
+#   which captures earnings acceleration but NOT the market-surprise component
+#   that drives the PEAD drift anomaly.
 #
-# Data source: Screener.in quarterly results page + analyst estimates
-# We'll build this in Week 6 after the base 4-factor model is working.
+# HOW WE USE IT:
+#   - Compute QoQ EPS change % = (latest_eps - prev_eps) / |prev_eps| × 100
+#   - Apply a 60-day linear decay from the quarter-end announcement date
+#     (recent earnings acceleration matters more than stale ones)
+#   - Z-score cross-sectionally and add as the 5th factor (20% weight)
+#
+# Data source: Screener.in quarterly results page ("EPS in Rs" row)
 
 import time
 import pandas as pd
@@ -43,25 +51,28 @@ def _safe_float(text: str):
         return None
 
 
-# ── Earnings Surprise Calculation ─────────────────────────────────────────────
+# ── QoQ EPS Change Calculation ────────────────────────────────────────────────
 
 def compute_earnings_surprise(actual_eps: float, estimated_eps: float) -> float:
     """
-    Calculate earnings surprise as a percentage.
+    Calculate quarter-over-quarter EPS change as a percentage.
 
-    Formula: (Actual - Estimated) / |Estimated| × 100
+    Named "earnings_surprise" for historical reasons; this measures sequential
+    EPS momentum, not surprise vs analyst consensus.
+
+    Formula: (latest_eps - prev_eps) / |prev_eps| × 100
 
     Examples:
-        Estimated: ₹10, Actual: ₹12 → Surprise = +20%  (big beat → buy signal)
-        Estimated: ₹10, Actual: ₹8  → Surprise = -20%  (miss → sell signal)
-        Estimated: ₹10, Actual: ₹10 → Surprise = 0%    (in-line)
+        Prev: ₹10, Latest: ₹12 → +20%  (accelerating earnings)
+        Prev: ₹10, Latest: ₹8  → -20%  (decelerating earnings)
+        Prev: ₹10, Latest: ₹10 →   0%  (flat earnings)
 
     Args:
-        actual_eps: Actual EPS reported by the company (₹)
-        estimated_eps: Analyst consensus EPS estimate (₹)
+        actual_eps: Most recent quarter EPS (₹)
+        estimated_eps: Previous quarter EPS used as the baseline (₹)
 
     Returns:
-        Surprise percentage (float). Positive = beat, Negative = miss.
+        QoQ EPS change percentage (float). Positive = acceleration.
     """
     if not estimated_eps or estimated_eps == 0:
         return None
@@ -152,16 +163,17 @@ def scrape_quarterly_eps(ticker: str) -> dict:
 
 def compute_surprise_factor_for_universe(universe: list) -> pd.Series:
     """
-    Compute the earnings surprise z-score for every stock in the universe.
+    Compute the QoQ EPS momentum z-score for every stock in the universe.
 
     Steps per stock:
       1. Scrape latest two quarterly EPS from Screener.in
-      2. Surprise % = (latest_eps - prev_eps) / |prev_eps| × 100
-      3. Apply PEAD linear decay over 60 days from announcement date
-      4. Z-score the raw surprises cross-sectionally
+      2. QoQ change % = (latest_eps - prev_eps) / |prev_eps| × 100
+      3. Apply linear decay over 60 days from estimated announcement date
+         (recent earnings acceleration carries more weight)
+      4. Z-score cross-sectionally
 
     Returns:
-        pd.Series indexed by ticker (higher = bigger beat vs peers)
+        pd.Series indexed by ticker (higher = stronger recent EPS acceleration)
     """
     raw_surprises = {}
 
@@ -197,19 +209,19 @@ def compute_surprise_factor_for_universe(universe: list) -> pd.Series:
     return (series - series.mean()) / std
 
 
-# ── Recency Decay: PEAD signal fades over time ────────────────────────────────
+# ── Recency Decay: EPS momentum signal fades over time ───────────────────────
 
 def apply_pead_decay(surprise_score: float, days_since_announcement: int) -> float:
     """
-    The earnings surprise signal is strongest right after announcement and
-    fades over ~60 days. Apply a simple linear decay.
+    Weight recent earnings acceleration more heavily than stale data.
+    Apply a linear decay to zero over 60 days from the estimated announcement date.
 
     Args:
-        surprise_score: Raw surprise z-score
-        days_since_announcement: How many days ago was the earnings release
+        surprise_score: Raw QoQ EPS change score
+        days_since_announcement: Estimated days since quarter results were filed
 
     Returns:
-        Decayed surprise score (0 after 60 days)
+        Decayed score (0.0 once 60 days have elapsed)
     """
     DRIFT_WINDOW_DAYS = 60
 

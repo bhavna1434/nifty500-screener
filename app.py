@@ -100,7 +100,7 @@ with st.sidebar:
     w_growth   = st.slider("📈 Growth (Rev + EPS CAGR)", min_value=0, max_value=100, value=20, step=5)
     w_quality  = st.slider("🏆 Quality (ROE, ROCE)",     min_value=0, max_value=100, value=20, step=5)
     w_momentum = st.slider("⚡ Momentum (6M return)",    min_value=0, max_value=100, value=20, step=5)
-    w_surprise = st.slider("📣 Earnings Surprise (PEAD)",min_value=0, max_value=100, value=20, step=5)
+    w_surprise = st.slider("📣 EPS Momentum (QoQ Growth)", min_value=0, max_value=100, value=20, step=5)
 
     total = w_value + w_growth + w_quality + w_momentum + w_surprise
     if total == 0:
@@ -112,7 +112,7 @@ with st.sidebar:
             "growth":   w_growth   / total,
             "quality":  w_quality  / total,
             "momentum": w_momentum / total,
-            "surprise": w_surprise / total,
+            "eps_momentum": w_surprise / total,
         }
         st.caption("Effective weights (sum = 100%):")
         for name, w in weights.items():
@@ -189,13 +189,13 @@ if run_clicked and weights:
                 )
             st.toast(f"Scraped {len(all_tickers)} stocks — cache saved to data/fundamentals_cache.csv")
 
-        # ── Stage 2b: earnings surprise scores ───────────────────────────────────
+        # ── Stage 2b: EPS momentum scores (QoQ EPS change, z-scored) ─────────────
         surprise_scores = None
         if passing:
             from src.earnings_surprise import compute_surprise_factor_for_universe
-            with st.spinner(f"Stage 2b: Fetching earnings surprise for {len(passing)} stocks…"):
+            with st.spinner(f"Stage 2b: Fetching EPS momentum for {len(passing)} stocks…"):
                 surprise_scores = compute_surprise_factor_for_universe(passing)
-            st.toast(f"Earnings surprise computed for {(surprise_scores != 0).sum()} stocks")
+            st.toast(f"EPS momentum computed for {(surprise_scores != 0).sum()} stocks")
 
         # ── Stage 3: factor model ranking ─────────────────────────────────────
         if passing:
@@ -329,13 +329,25 @@ with tab1:
 
         display_cols = ["rank", "ticker", "composite_score",
                         "value_score", "growth_score", "quality_score",
-                        "momentum_score", "surprise_score"]
+                        "momentum_score", "eps_momentum_score"]
         if "rsi" in display_df_full.columns:
             display_cols += ["rsi", "above_ma50", "pct_from_52w_high"]
 
         display_df = display_df_full[display_cols].head(int(top_n)).copy()
-        display_df.columns = [c.replace("_score", "").replace("_", " ").title()
-                               for c in display_df.columns]
+        _col_rename = {
+            "rank":              "Rank",
+            "ticker":            "Ticker",
+            "composite_score":   "Composite",
+            "value_score":       "Value",
+            "growth_score":      "Growth",
+            "quality_score":     "Quality",
+            "momentum_score":    "Momentum",
+            "eps_momentum_score": "EPS Mom",
+            "rsi":               "RSI",
+            "above_ma50":        "Above MA50",
+            "pct_from_52w_high": "% From High",
+        }
+        display_df.rename(columns=_col_rename, inplace=True)
 
         st.dataframe(
             display_df,
@@ -344,6 +356,15 @@ with tab1:
             column_config={
                 "Composite": st.column_config.ProgressColumn(
                     "Composite Score", min_value=-3, max_value=3, format="%.2f"
+                ),
+                "EPS Mom": st.column_config.NumberColumn(
+                    "EPS Mom",
+                    help=(
+                        "Quarter-over-quarter EPS growth rate, z-scored. "
+                        "Note: this is EPS momentum, not true earnings surprise "
+                        "vs analyst consensus."
+                    ),
+                    format="%.2f",
                 ),
             }
         )
@@ -406,7 +427,7 @@ with tab1:
                         "growth_score":     _safe(_r.get("growth_score")),
                         "quality_score":    _safe(_r.get("quality_score")),
                         "momentum_score":   _safe(_r.get("momentum_score")),
-                        "surprise_score":   _safe(_r.get("surprise_score")),
+                        "surprise_score":   _safe(_r.get("eps_momentum_score")),
                         "piotroski_score":  int(_safe(_f.get("piotroski_score"))),
                         "altman_zone":      _f.get("altman_zone", "—"),
                         "altman_zscore":    _safe(_f.get("altman_zscore")),
@@ -480,11 +501,11 @@ with tab4:
                 _row = _rdf[_rdf["ticker"] == _tick]
                 if not _row.empty:
                     _scores = {
-                        "value":    float(_row["value_score"].iloc[0]),
-                        "growth":   float(_row["growth_score"].iloc[0]),
-                        "quality":  float(_row["quality_score"].iloc[0]),
-                        "momentum": float(_row["momentum_score"].iloc[0]),
-                        "surprise": float(_row["surprise_score"].iloc[0]),
+                        "value":        float(_row["value_score"].iloc[0]),
+                        "growth":       float(_row["growth_score"].iloc[0]),
+                        "quality":      float(_row["quality_score"].iloc[0]),
+                        "momentum":     float(_row["momentum_score"].iloc[0]),
+                        "eps_momentum": float(_row["eps_momentum_score"].iloc[0]),
                     }
                     st.plotly_chart(plot_factor_radar(_tick, _scores), use_container_width=True)
                 else:
@@ -514,7 +535,7 @@ with tab5:
             "Stocks that were delisted, merged, or dropped from the index between 2019–2024 are "
             "excluded, which artificially inflates returns. Real-world results would be lower.\n\n"
             "**Price-momentum only:** The live screener uses 5 factors (value, growth, quality, "
-            "momentum, earnings surprise). This backtest uses price momentum only — historical "
+            "momentum, EPS momentum). This backtest uses price momentum only — historical "
             "fundamental data requires a paid source (Trendlyne Pro, Bloomberg).\n\n"
             "**No look-ahead bias on momentum:** The momentum signal uses only prices available "
             "at each rebalancing date. The most recent month is excluded to avoid the short-term "
