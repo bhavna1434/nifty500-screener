@@ -174,6 +174,22 @@ def compute_growth_score(fundamentals_df: pd.DataFrame) -> pd.Series:
         pd.Series indexed by ticker (higher = faster growing)
     """
     df = fundamentals_df.copy().set_index("ticker")
+
+    # Old cache entries may contain complex-number strings like "(7.87+0j)"
+    # (produced when a negative EPS base was raised to 1/3 in an earlier version).
+    # Extract the real part; anything that can't be parsed becomes NaN.
+    for col in ["revenue_cagr_3y", "eps_cagr_3y"]:
+        if col in df.columns:
+            def _to_real(x):
+                try:
+                    return float(x)
+                except (ValueError, TypeError):
+                    try:
+                        return complex(str(x)).real
+                    except Exception:
+                        return np.nan
+            df[col] = df[col].apply(_to_real)
+
     df = df.dropna(subset=["revenue_cagr_3y", "eps_cagr_3y"])
 
     # Winsorise

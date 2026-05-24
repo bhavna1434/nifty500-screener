@@ -217,18 +217,19 @@ def fetch_fundamentals(ticker: str) -> dict | None:
             pl_data = _parse_screener_table(table)
 
             # Revenue CAGR (3-year): compare latest vs 3 years ago
+            # Guard: base must be positive — negative ** (1/3) returns complex in Python
             if "Sales" in pl_data and len(pl_data["Sales"]) >= 4:
                 rev_latest = pl_data["Sales"][-1]
                 rev_3y_ago = pl_data["Sales"][-4]
-                if rev_3y_ago and rev_latest and rev_3y_ago > 0:
-                    data["revenue_cagr_3y"] = ((rev_latest / rev_3y_ago) ** (1/3) - 1) * 100
+                if rev_3y_ago and rev_latest and rev_3y_ago > 0 and rev_latest > 0:
+                    data["revenue_cagr_3y"] = (abs(rev_latest / rev_3y_ago) ** (1/3) - 1) * 100
 
-            # EPS CAGR (3-year)
+            # EPS CAGR (3-year): skip if either end is negative (undefined CAGR)
             if "EPS in Rs" in pl_data and len(pl_data["EPS in Rs"]) >= 4:
                 eps_latest = pl_data["EPS in Rs"][-1]
                 eps_3y_ago = pl_data["EPS in Rs"][-4]
-                if eps_3y_ago and eps_latest and eps_3y_ago > 0:
-                    data["eps_cagr_3y"] = ((eps_latest / eps_3y_ago) ** (1/3) - 1) * 100
+                if eps_3y_ago and eps_latest and eps_3y_ago > 0 and eps_latest > 0:
+                    data["eps_cagr_3y"] = (abs(eps_latest / eps_3y_ago) ** (1/3) - 1) * 100
 
             # Net income for Piotroski A1/A3/A4
             if "Net Profit" in pl_data and pl_data["Net Profit"]:

@@ -15,10 +15,32 @@
 # Data source: Screener.in quarterly results page + analyst estimates
 # We'll build this in Week 6 after the base 4-factor model is working.
 
+import time
 import pandas as pd
 import numpy as np
 import requests
 from bs4 import BeautifulSoup
+from datetime import datetime, timedelta
+
+HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/120.0.0.0 Safari/537.36"
+    )
+}
+REQUEST_DELAY   = 1.0
+REQUEST_TIMEOUT = 15
+DRIFT_WINDOW_DAYS = 60
+
+
+def _safe_float(text: str):
+    """Parse a string to float, return None on failure."""
+    try:
+        cleaned = str(text).replace(",", "").replace("%", "").strip()
+        return float(cleaned) if cleaned not in ("", "-", "None") else None
+    except (ValueError, TypeError):
+        return None
 
 
 # ── Earnings Surprise Calculation ─────────────────────────────────────────────
@@ -41,108 +63,138 @@ def compute_earnings_surprise(actual_eps: float, estimated_eps: float) -> float:
     Returns:
         Surprise percentage (float). Positive = beat, Negative = miss.
     """
-    if estimated_eps == 0 or estimated_eps is None:
-        return None  # Can't compute if no estimate available
-
+    if not estimated_eps or estimated_eps == 0:
+        return None
     return ((actual_eps - estimated_eps) / abs(estimated_eps)) * 100
 
 
 def scrape_quarterly_eps(ticker: str) -> dict:
     """
-    Scrape the latest quarterly EPS from Screener.in.
-
-    URL pattern: https://www.screener.in/company/{ticker}/
-    We look for the 'Quarterly Results' table.
-
-    Args:
-        ticker: NSE symbol (e.g. "RELIANCE")
+    Scrape the latest two quarters of EPS from Screener.in quarterly results table.
 
     Returns:
         dict with keys:
-            - latest_eps (float): Most recent quarterly EPS
-            - prev_eps (float): EPS from same quarter last year (for YoY comparison)
-            - quarters (list): Last 4 quarters of EPS data
+            latest_eps (float)              — most recent quarter EPS
+            prev_eps (float)                — previous quarter EPS (used as proxy estimate)
+            quarters (list of (str, float)) — all (quarter_label, eps) pairs found
+            days_since_announcement (int)   — estimated days since latest results release
     """
+    _empty = {"latest_eps": None, "prev_eps": None,
+               "quarters": [], "days_since_announcement": None}
     url = f"https://www.screener.in/company/{ticker}/"
-    headers = {"User-Agent": "Mozilla/5.0"}  # Identify ourselves politely
 
     try:
-        response = requests.get(url, headers=headers, timeout=10)
-        soup = BeautifulSoup(response.text, "html.parser")
+        resp = requests.get(url, headers=HEADERS, timeout=REQUEST_TIMEOUT)
+        if resp.status_code != 200:
+            return _empty
+        soup = BeautifulSoup(resp.text, "html.parser")
 
-        # Find the quarterly results section
-        # TODO Week 6: parse the actual HTML structure from Screener.in
-        # The quarterly table has id="quarters" on Screener.in
-        quarterly_table = soup.find("section", {"id": "quarters"})
+        section = soup.find("section", {"id": "quarters"})
+        if not section:
+            return _empty
 
-        # Placeholder — implement in Week 6 after exploring the page structure
-        return {"latest_eps": None, "prev_eps": None, "quarters": []}
+        table = section.find("table")
+        if not table:
+            return _empty
+
+        rows = table.find_all("tr")
+        if not rows:
+            return _empty
+
+        # Header row — quarter labels ("Mar 2025", "Jun 2025", …)
+        header_cols = rows[0].find_all(["th", "td"])
+        quarter_labels = [c.get_text(strip=True) for c in header_cols[1:]]
+
+        # Find "EPS in Rs" row
+        eps_values = []
+        for row in rows[1:]:
+            cols = row.find_all("td")
+            if not cols:
+                continue
+            label = cols[0].get_text(strip=True).rstrip("+").strip()
+            if label == "EPS in Rs":
+                eps_values = [_safe_float(c.get_text(strip=True)) for c in cols[1:]]
+                break
+
+        if not eps_values:
+            return _empty
+
+        # Pair labels with values and drop any None-valued entries
+        quarters = [(q, v) for q, v in zip(quarter_labels, eps_values) if v is not None]
+        if len(quarters) < 2:
+            return _empty
+
+        latest_eps = quarters[-1][1]
+        prev_eps   = quarters[-2][1]
+
+        # Estimate days since announcement:
+        # Indian companies typically file results ~45 days after quarter end.
+        days_since = None
+        try:
+            latest_qtr_str = quarters[-1][0]          # e.g. "Mar 2026"
+            qtr_end = datetime.strptime(latest_qtr_str, "%b %Y")
+            announcement = qtr_end + timedelta(days=45)
+            days_since = max(0, (datetime.now() - announcement).days)
+        except ValueError:
+            pass
+
+        return {
+            "latest_eps":              latest_eps,
+            "prev_eps":                prev_eps,
+            "quarters":                quarters,
+            "days_since_announcement": days_since,
+        }
 
     except Exception as e:
         print(f"  Warning: Could not fetch EPS for {ticker}: {e}")
-        return {"latest_eps": None, "prev_eps": None, "quarters": []}
-
-
-def get_analyst_estimate(ticker: str) -> float:
-    """
-    Get consensus analyst EPS estimate for the latest quarter.
-
-    Options (implement one in Week 6):
-      Option A: Scrape from Moneycontrol analyst estimates page
-      Option B: Use the previous quarter's EPS as a simple proxy estimate
-                (a 0% growth assumption — simple but works as a baseline)
-      Option C: Use a paid data API if available
-
-    For our purposes, Option B (prev quarter EPS) works fine as a starting point.
-
-    Args:
-        ticker: NSE symbol
-
-    Returns:
-        Estimated EPS (float), or None if unavailable
-    """
-    # Simple proxy: use last year's same-quarter EPS as the "estimate"
-    eps_data = scrape_quarterly_eps(ticker)
-    return eps_data.get("prev_eps")  # YoY same-quarter EPS = our proxy estimate
+        return _empty
 
 
 def compute_surprise_factor_for_universe(universe: list) -> pd.Series:
     """
-    Compute the earnings surprise z-score for all stocks in the universe.
-    This is what we feed into the composite factor model.
+    Compute the earnings surprise z-score for every stock in the universe.
 
-    Args:
-        universe: List of ticker symbols
+    Steps per stock:
+      1. Scrape latest two quarterly EPS from Screener.in
+      2. Surprise % = (latest_eps - prev_eps) / |prev_eps| × 100
+      3. Apply PEAD linear decay over 60 days from announcement date
+      4. Z-score the raw surprises cross-sectionally
 
     Returns:
-        pandas Series indexed by ticker, values are z-scored surprise
-        (higher = bigger beat relative to peers → higher factor score)
+        pd.Series indexed by ticker (higher = bigger beat vs peers)
     """
-    surprises = {}
+    raw_surprises = {}
 
-    for ticker in universe:
+    for i, ticker in enumerate(universe):
+        if i > 0:
+            time.sleep(REQUEST_DELAY)
+
         eps_data = scrape_quarterly_eps(ticker)
-        estimate = get_analyst_estimate(ticker)
+        actual   = eps_data.get("latest_eps")
+        estimate = eps_data.get("prev_eps")
 
-        actual = eps_data.get("latest_eps")
         if actual is None or estimate is None:
-            surprises[ticker] = None
+            raw_surprises[ticker] = None
             continue
 
         surprise_pct = compute_earnings_surprise(actual, estimate)
-        surprises[ticker] = surprise_pct
+        if surprise_pct is None:
+            raw_surprises[ticker] = None
+            continue
 
-    # Convert to Series and fill missing with 0 (neutral — no surprise data)
-    surprise_series = pd.Series(surprises).fillna(0)
+        days = eps_data.get("days_since_announcement")
+        if days is not None:
+            surprise_pct = apply_pead_decay(surprise_pct, days)
 
-    # Z-score across the universe so it's comparable with other factors
-    mean = surprise_series.mean()
-    std = surprise_series.std()
+        raw_surprises[ticker] = surprise_pct
+
+    series = pd.Series(raw_surprises).fillna(0.0)
+
+    std = series.std()
     if std == 0:
-        return surprise_series * 0  # all same → all zero
+        return series * 0.0
 
-    z_scored = (surprise_series - mean) / std
-    return z_scored
+    return (series - series.mean()) / std
 
 
 # ── Recency Decay: PEAD signal fades over time ────────────────────────────────

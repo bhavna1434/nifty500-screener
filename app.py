@@ -174,6 +174,14 @@ if run_clicked and weights:
                 )
             st.toast(f"Scraped {len(all_tickers)} stocks — cache saved to data/fundamentals_cache.csv")
 
+        # ── Stage 2b: earnings surprise scores ───────────────────────────────────
+        surprise_scores = None
+        if passing:
+            from src.earnings_surprise import compute_surprise_factor_for_universe
+            with st.spinner(f"Stage 2b: Fetching earnings surprise for {len(passing)} stocks…"):
+                surprise_scores = compute_surprise_factor_for_universe(passing)
+            st.toast(f"Earnings surprise computed for {(surprise_scores != 0).sum()} stocks")
+
         # ── Stage 3: factor model ranking ─────────────────────────────────────
         if passing:
             with st.spinner(f"Stage 3: Ranking {len(passing)} stocks by factor model…"):
@@ -181,6 +189,7 @@ if run_clicked and weights:
                     universe=passing,
                     price_df=raw,
                     fundamentals_df=fundamentals_df,
+                    surprise_scores=surprise_scores,
                     weights=weights,
                 )
             top_n_tickers = ranked_df["ticker"].head(int(top_n)).tolist()
