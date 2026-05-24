@@ -20,6 +20,7 @@ from src.fundamental_filter import apply_red_flag_filter, fetch_fundamentals
 from src.factor_model import rank_stocks
 from src.technical_filter import apply_green_flag_filter
 from src.history_tracker import init_database, save_run, render_history_section, get_stock_history
+from src.pdf_export import generate_tearsheet
 from src.visualizations import (
     plot_correlation_heatmap,
     plot_factor_attribution,
@@ -226,12 +227,14 @@ if run_clicked and weights:
             )
 
         # Persist in session state
-        st.session_state["ranked_df"]      = ranked_df
-        st.session_state["excluded_df"]    = excluded_df
-        st.session_state["tech_df"]        = tech_df
-        st.session_state["final_picks"]    = final_picks
-        st.session_state["passing_count"]  = len(passing)
-        st.session_state["universe_count"] = len(all_tickers)
+        st.session_state["ranked_df"]       = ranked_df
+        st.session_state["excluded_df"]     = excluded_df
+        st.session_state["tech_df"]         = tech_df
+        st.session_state["final_picks"]     = final_picks
+        st.session_state["passing_count"]   = len(passing)
+        st.session_state["universe_count"]  = len(all_tickers)
+        st.session_state["fundamentals_df"] = fundamentals_df
+        st.session_state["nifty_df"]        = nifty_df
 
         # Save run to history database
         if not ranked_df.empty:
@@ -348,8 +351,77 @@ with tab1:
 
     st.divider()
     st.subheader("Download Tearsheets")
-    st.caption("One-page PDF summary per stock — available after Week 9 build.")
-    st.info("🚧 PDF tearsheets coming in Week 9.")
+    st.caption("One-page PDF summary for each stock that passed all 4 stages.")
+
+    _final    = st.session_state.get("final_picks", [])
+    _rdf      = st.session_state.get("ranked_df", pd.DataFrame())
+    _fdf      = st.session_state.get("fundamentals_df", pd.DataFrame())
+    _tdf      = st.session_state.get("tech_df", pd.DataFrame())
+    _ndf      = st.session_state.get("nifty_df", pd.DataFrame())
+    _regime   = st.session_state.get("regime", "Neutral")
+
+    if not _final:
+        st.info("Run the screener to generate tearsheets.")
+    else:
+        # Build per-ticker lookup dicts once
+        _ranked_lu = _rdf.set_index("ticker").to_dict("index") if not _rdf.empty else {}
+        _fund_lu   = _fdf.set_index("ticker").to_dict("index") if not _fdf.empty else {}
+        _tech_lu   = _tdf.set_index("ticker").to_dict("index") if not _tdf.empty else {}
+        _name_lu   = dict(zip(_ndf["Symbol"], _ndf["Company Name"])) if not _ndf.empty else {}
+        _sector_lu = dict(zip(_ndf["Symbol"], _ndf["Industry"]))    if not _ndf.empty else {}
+
+        # Render 3 buttons per row
+        for _i in range(0, len(_final), 3):
+            _row_tickers = _final[_i : _i + 3]
+            _cols = st.columns(len(_row_tickers))
+            for _col, _tk in zip(_cols, _row_tickers):
+                with _col:
+                    _r = _ranked_lu.get(_tk, {})
+                    _f = _fund_lu.get(_tk, {})
+                    _t = _tech_lu.get(_tk, {})
+
+                    def _safe(v, default=0):
+                        try:
+                            return float(v) if v is not None else default
+                        except (TypeError, ValueError):
+                            return default
+
+                    _stock_data = {
+                        "ticker":           _tk,
+                        "company_name":     _name_lu.get(_tk, _tk),
+                        "sector":           _sector_lu.get(_tk, ""),
+                        "rank":             _r.get("rank", "—"),
+                        "regime":           _regime,
+                        "composite_score":  _safe(_r.get("composite_score")),
+                        "value_score":      _safe(_r.get("value_score")),
+                        "growth_score":     _safe(_r.get("growth_score")),
+                        "quality_score":    _safe(_r.get("quality_score")),
+                        "momentum_score":   _safe(_r.get("momentum_score")),
+                        "surprise_score":   _safe(_r.get("surprise_score")),
+                        "piotroski_score":  int(_safe(_f.get("piotroski_score"))),
+                        "altman_zone":      _f.get("altman_zone", "—"),
+                        "altman_zscore":    _safe(_f.get("altman_zscore")),
+                        "current_price":    _safe(_t.get("current_price")),
+                        "pe_ratio":         _safe(_f.get("pe_ratio")),
+                        "roce":             _safe(_f.get("roce")),
+                        "debt_equity":      _safe(_f.get("debt_equity")),
+                        "revenue_cagr_3y":  _safe(_f.get("revenue_cagr_3y")),
+                        "eps_cagr_3y":      _safe(_f.get("eps_cagr_3y")),
+                        "rsi":              _safe(_r.get("rsi", _t.get("rsi"))),
+                        "ma_50":            _safe(_t.get("ma_50")),
+                        "pct_from_52w_high": _safe(_r.get("pct_from_52w_high",
+                                                           _t.get("pct_from_52w_high"))),
+                    }
+
+                    _pdf_bytes = generate_tearsheet(_stock_data)
+                    st.download_button(
+                        label=f"📄 {_tk}",
+                        data=_pdf_bytes,
+                        file_name=f"{_tk}_tearsheet_{pd.Timestamp.today().date()}.pdf",
+                        mime="application/pdf",
+                        key=f"dl_{_tk}",
+                        use_container_width=True,
+                    )
 
 
 # ── TAB 2: Factor Analysis ────────────────────────────────────────────────────

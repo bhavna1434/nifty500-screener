@@ -58,7 +58,7 @@ class TearsheetPDF(FPDF):
         self.set_font("Helvetica", "B", 10)
         self.set_text_color(255, 255, 255)
         self.set_xy(10, 2)
-        self.cell(0, 8, "QUANTAMENTAL NIFTY 500 SCREENER — Stock Tearsheet", ln=0)
+        self.cell(0, 8, "QUANTAMENTAL NIFTY 500 SCREENER - Stock Tearsheet", ln=0)
 
     def footer(self):
         self.set_y(-12)
@@ -125,7 +125,7 @@ def generate_tearsheet(stock_data: dict) -> bytes:
     pdf.set_fill_color(*COLOR_BLUE)
     pdf.set_text_color(255, 255, 255)
     pdf.set_font("Helvetica", "B", 14)
-    pdf.cell(40, 14, f"Rank  #{stock_data.get('rank', '—')}", border=0, fill=True, align="C")
+    pdf.cell(40, 14, f"Rank  #{stock_data.get('rank', '-')}", border=0, fill=True, align="C")
 
     # Regime label
     regime = stock_data.get("regime", "Neutral")
@@ -147,7 +147,7 @@ def generate_tearsheet(stock_data: dict) -> bytes:
     composite = stock_data.get("composite_score", 0)
     piotroski  = stock_data.get("piotroski_score", 0)
     altman_z   = stock_data.get("altman_zscore", 0)
-    altman_zone = stock_data.get("altman_zone", "—")
+    altman_zone = stock_data.get("altman_zone", "-")
 
     _metric_box(pdf, x=10,  y=53, w=58, label="Composite Score", value=f"{composite:.2f}", color=COLOR_BLUE)
     _metric_box(pdf, x=72,  y=53, w=58, label="Piotroski F-Score",
@@ -177,7 +177,7 @@ def generate_tearsheet(stock_data: dict) -> bytes:
     _section_header(pdf, "Fundamental Snapshot", y=110)
 
     fundamentals = [
-        ("Current Price",   f"₹{stock_data.get('current_price', 0):,.0f}"),
+        ("Current Price",   f"Rs.{stock_data.get('current_price', 0):,.0f}"),
         ("P/E Ratio",       f"{stock_data.get('pe_ratio', 0):.1f}x"),
         ("ROCE",            f"{stock_data.get('roce', 0):.1f}%"),
         ("Debt / Equity",   f"{stock_data.get('debt_equity', 0):.2f}x"),
@@ -197,7 +197,7 @@ def generate_tearsheet(stock_data: dict) -> bytes:
 
     tech_checks = [
         ("RSI (14-day)",         f"{rsi:.1f}",  rsi <= 70),
-        ("Price vs 50-day MA",   f"{'Above' if price >= ma50 else 'Below'} (MA: ₹{ma50:,.0f})",
+        ("Price vs 50-day MA",   f"{'Above' if price >= ma50 else 'Below'} (MA: Rs.{ma50:,.0f})",
                                   price >= ma50),
         ("From 52-week High",    f"{pct_52w:.1f}% below",  pct_52w <= 20),
     ]
