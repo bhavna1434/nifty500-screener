@@ -5,6 +5,7 @@
 import streamlit as st
 import pandas as pd
 import yfinance as yf
+import ta
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -587,30 +588,97 @@ with tab4:
     if search_ticker:
         _tick = search_ticker.upper()
         st.caption(f"Showing data for: **{_tick}**")
-        col_l, col_r = st.columns(2)
-        with col_l:
-            _rdf = st.session_state.get("ranked_df")
-            if _rdf is not None and not _rdf.empty:
-                _row = _rdf[_rdf["ticker"] == _tick]
-                if not _row.empty:
-                    _scores = {
-                        "value":        float(_row["value_score"].iloc[0]),
-                        "growth":       float(_row["growth_score"].iloc[0]),
-                        "quality":      float(_row["quality_score"].iloc[0]),
-                        "momentum":     float(_row["momentum_score"].iloc[0]),
-                        "eps_momentum": float(_row["eps_momentum_score"].iloc[0]),
-                    }
-                    st.plotly_chart(plot_factor_radar(_tick, _scores), use_container_width=True)
-                else:
-                    st.info(f"{_tick} not in current screener results.")
-            else:
-                st.info("Run the screener to see the factor profile.")
-        with col_r:
-            _hist = get_stock_history(_tick)
-            if not _hist.empty:
-                st.plotly_chart(plot_rank_history(_tick, _hist), use_container_width=True)
-            else:
-                st.info(f"No history yet for {_tick}. Run the screener to record it.")
+
+        _hist_raw = yf.Ticker(_tick + ".NS").history(period="1y")
+
+        if _hist_raw.empty:
+            st.warning(f"No price data found for {_tick}. Check the ticker symbol.")
+        else:
+            # Clean index — strip timezone so Plotly doesn't complain
+            _hist_raw.index = pd.to_datetime(_hist_raw.index).tz_localize(None)
+            _close = _hist_raw["Close"]
+
+            # Moving averages
+            _ma50  = _close.rolling(window=50).mean()
+            _ma200 = _close.rolling(window=200).mean()
+
+            col_l, col_r = st.columns([3, 2])
+
+            # ── Left: price chart ─────────────────────────────────────────────
+            with col_l:
+                import plotly.graph_objects as go
+                _fig = go.Figure()
+                _fig.add_trace(go.Scatter(
+                    x=_close.index, y=_close.values,
+                    name="Close", line=dict(color="#378ADD", width=1.8),
+                    hovertemplate="%{x|%d %b %Y}  Rs.%{y:,.2f}<extra></extra>",
+                ))
+                _fig.add_trace(go.Scatter(
+                    x=_ma50.index, y=_ma50.values,
+                    name="MA50", line=dict(color="#E07B00", width=1.4, dash="dash"),
+                    hovertemplate="MA50: Rs.%{y:,.2f}<extra></extra>",
+                ))
+                _fig.add_trace(go.Scatter(
+                    x=_ma200.index, y=_ma200.values,
+                    name="MA200", line=dict(color="#CC2222", width=1.4, dash="dash"),
+                    hovertemplate="MA200: Rs.%{y:,.2f}<extra></extra>",
+                ))
+                _fig.update_layout(
+                    title=dict(text=f"{_tick} — Price + Moving Averages", font=dict(size=13)),
+                    height=360,
+                    plot_bgcolor="white",
+                    paper_bgcolor="white",
+                    legend=dict(orientation="h", yanchor="bottom", y=1.01,
+                                xanchor="left", x=0),
+                    margin=dict(t=50, b=30, l=10, r=10),
+                    xaxis=dict(gridcolor="#f0f0f0", showgrid=True),
+                    yaxis=dict(gridcolor="#f0f0f0", tickprefix="Rs."),
+                )
+                st.plotly_chart(_fig, use_container_width=True)
+
+            # ── Right: metrics panel ──────────────────────────────────────────
+            with col_r:
+                _current   = float(_close.iloc[-1])
+                _high_252  = float(_close.iloc[-252:].max()) if len(_close) >= 252 else float(_close.max())
+                _low_252   = float(_close.iloc[-252:].min()) if len(_close) >= 252 else float(_close.min())
+                _price_126 = float(_close.iloc[-126]) if len(_close) >= 126 else float(_close.iloc[0])
+                _ret_6m    = (_current / _price_126 - 1) * 100
+                _dist_high = (_current - _high_252) / _high_252 * 100
+
+                _rsi_val = float(
+                    ta.momentum.RSIIndicator(close=_close.squeeze(), window=14)
+                    .rsi().iloc[-1]
+                )
+
+                st.markdown("**Key Statistics**")
+                _m1, _m2, _m3 = st.columns(3)
+                _m1.metric("Current Price",  f"Rs.{_current:,.2f}")
+                _m2.metric("52-Week High",   f"Rs.{_high_252:,.2f}")
+                _m3.metric("52-Week Low",    f"Rs.{_low_252:,.2f}")
+
+                _m4, _m5, _m6 = st.columns(3)
+                _m4.metric(
+                    "6M Return",
+                    f"{_ret_6m:+.1f}%",
+                    delta=f"{_ret_6m:+.1f}%",
+                    delta_color="normal",
+                )
+                _m5.metric(
+                    "RSI (14)",
+                    f"{_rsi_val:.1f}",
+                    help="Oversold < 30  |  Overbought > 70",
+                )
+                _m6.metric(
+                    "From 52W High",
+                    f"{_dist_high:.1f}%",
+                    delta=f"{_dist_high:.1f}%",
+                    delta_color="inverse",
+                )
+
+            st.caption(
+                "Price data from Yahoo Finance (NSE). "
+                "Ticker format: RELIANCE → RELIANCE.NS"
+            )
 
 
 # ── TAB 5: Backtest ──────────────────────────────────────────────────────────
