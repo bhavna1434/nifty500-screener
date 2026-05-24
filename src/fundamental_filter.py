@@ -137,6 +137,8 @@ def fetch_fundamentals(ticker: str) -> dict | None:
 
             if "stock p/e" in label or "p/e" in label:
                 data["pe_ratio"] = val
+            elif "market cap" in label:
+                data["market_cap"] = val        # crores
             elif "roce" in label:
                 data["roce"] = val
             elif "roe" in label:
@@ -205,11 +207,15 @@ def fetch_fundamentals(ticker: str) -> dict | None:
                         data["promoter_holding"] = val
 
     # ── 5. P&L data for CAGR computation ─────────────────────────────────────
+    # Screener.in P&L labels (after stripping trailing '+'):
+    #   Sales, Expenses, Operating Profit, OPM %, Other Income,
+    #   Interest, Depreciation, Profit before tax, Tax %, Net Profit, EPS in Rs
     pl_section = soup.find("section", {"id": "profit-loss"})
     if pl_section:
         table = pl_section.find("table")
         if table:
             pl_data = _parse_screener_table(table)
+
             # Revenue CAGR (3-year): compare latest vs 3 years ago
             if "Sales" in pl_data and len(pl_data["Sales"]) >= 4:
                 rev_latest = pl_data["Sales"][-1]
@@ -224,41 +230,81 @@ def fetch_fundamentals(ticker: str) -> dict | None:
                 if eps_3y_ago and eps_latest and eps_3y_ago > 0:
                     data["eps_cagr_3y"] = ((eps_latest / eps_3y_ago) ** (1/3) - 1) * 100
 
-            # Net income for Piotroski
+            # Net income for Piotroski A1/A3/A4
             if "Net Profit" in pl_data and pl_data["Net Profit"]:
                 data["net_income"]      = pl_data["Net Profit"][-1]
                 data["net_income_prev"] = pl_data["Net Profit"][-2] if len(pl_data["Net Profit"]) > 1 else None
 
+            # Revenue + gross profit proxy (Operating Profit) for Piotroski C8/C9
+            if "Sales" in pl_data and pl_data["Sales"]:
+                data["revenue"]      = pl_data["Sales"][-1]
+                data["revenue_prev"] = pl_data["Sales"][-2] if len(pl_data["Sales"]) > 1 else None
+            if "Operating Profit" in pl_data and pl_data["Operating Profit"]:
+                data["gross_profit"]      = pl_data["Operating Profit"][-1]
+                data["gross_profit_prev"] = pl_data["Operating Profit"][-2] if len(pl_data["Operating Profit"]) > 1 else None
+
+            # EBIT for Altman Z'' (Operating Profit - Depreciation)
+            op_profit    = (pl_data.get("Operating Profit") or [None])[-1]
+            depreciation = (pl_data.get("Depreciation") or [None])[-1]
+            if op_profit is not None and depreciation is not None:
+                data["ebit"] = op_profit - depreciation
+
+            # Shares outstanding proxy: Net Profit / EPS (for Piotroski B7 dilution check)
+            eps_vals = pl_data.get("EPS in Rs", [])
+            np_vals  = pl_data.get("Net Profit", [])
+            if eps_vals and np_vals:
+                eps_now  = eps_vals[-1]
+                eps_prev = eps_vals[-2] if len(eps_vals) > 1 else None
+                ni_now   = np_vals[-1]
+                ni_prev  = np_vals[-2] if len(np_vals) > 1 else None
+                if eps_now and ni_now and eps_now != 0:
+                    data["shares_outstanding"]      = (ni_now * 1e7) / eps_now
+                if eps_prev and ni_prev and eps_prev != 0:
+                    data["shares_outstanding_prev"] = (ni_prev * 1e7) / eps_prev
+
     # ── 6. Balance sheet data for Piotroski / Altman Z'' ─────────────────────
+    # Screener.in balance sheet labels (actual):
+    #   'Equity Capital', 'Reserves', 'Borrowings+', 'Other Liabilities+',
+    #   'Total Liabilities', 'Fixed Assets+', 'CWIP', 'Investments',
+    #   'Other Assets+', 'Total Assets'
+    # No 'Current Assets' / 'Current Liabilities' in this condensed view.
     bs_section = soup.find("section", {"id": "balance-sheet"})
     if bs_section:
         table = bs_section.find("table")
         if table:
             bs_data = _parse_screener_table(table)
 
-            def latest(key, default=None):
-                vals = bs_data.get(key, [])
+            def _latest(key, default=None):
+                # Match exact key or key with trailing '+'
+                vals = bs_data.get(key) or bs_data.get(key + "+", [])
                 return vals[-1] if vals else default
 
-            def prev(key, default=None):
-                vals = bs_data.get(key, [])
+            def _prev(key, default=None):
+                vals = bs_data.get(key) or bs_data.get(key + "+", [])
                 return vals[-2] if len(vals) >= 2 else default
 
-            data["total_assets"]           = latest("Total Assets")
-            data["total_assets_prev"]      = prev("Total Assets")
-            data["current_assets"]         = latest("Current Assets")
-            data["current_assets_prev"]    = prev("Current Assets")
-            data["current_liabilities"]    = latest("Current Liabilities")
-            data["current_liabilities_prev"] = prev("Current Liabilities")
-            data["long_term_debt"]         = latest("Borrowings")
-            data["long_term_debt_prev"]    = prev("Borrowings")
-            data["retained_earnings"]      = latest("Reserves")
-            data["book_value_equity"]      = latest("Total Shareholders Funds")
-            data["total_liabilities"]      = latest("Total Liabilities")
+            data["total_assets"]           = _latest("Total Assets")
+            data["total_assets_prev"]      = _prev("Total Assets")
+            data["total_liabilities"]      = _latest("Total Liabilities")
+            data["long_term_debt"]         = _latest("Borrowings")
+            data["long_term_debt_prev"]    = _prev("Borrowings")
+            data["retained_earnings"]      = _latest("Reserves")
 
-            # Working capital for Altman Z''
-            if data.get("current_assets") and data.get("current_liabilities"):
-                data["working_capital"] = data["current_assets"] - data["current_liabilities"]
+            # Shareholders equity = Equity Capital + Reserves
+            eq_cap  = _latest("Equity Capital") or 0
+            eq_cap_prev = _prev("Equity Capital") or 0
+            reserves = _latest("Reserves") or 0
+            reserves_prev = _prev("Reserves") or 0
+            data["book_value_equity"]      = eq_cap + reserves if (eq_cap or reserves) else None
+            data["book_value_equity_prev"] = eq_cap_prev + reserves_prev if (eq_cap_prev or reserves_prev) else None
+
+            # Current assets/liabilities not in condensed view — leave as 0
+            # so Piotroski B6 (liquidity) scores 0 rather than crashing
+            data["current_assets"]         = None
+            data["current_assets_prev"]    = None
+            data["current_liabilities"]    = None
+            data["current_liabilities_prev"] = None
+            data["working_capital"]        = None
 
     # ── 7. Cash flow data for Piotroski ──────────────────────────────────────
     cf_section = soup.find("section", {"id": "cash-flow"})
@@ -266,9 +312,21 @@ def fetch_fundamentals(ticker: str) -> dict | None:
         table = cf_section.find("table")
         if table:
             cf_data = _parse_screener_table(table)
-            if "Cash from Operations" in cf_data:
-                vals = cf_data["Cash from Operations"]
+            # Actual label: "Cash from Operating Activity" (trailing + stripped)
+            cf_key = next((k for k in cf_data if "operating activity" in k.lower() or k == "Cash from Operations"), None)
+            if cf_key:
+                vals = cf_data[cf_key]
                 data["operating_cash_flow"] = vals[-1] if vals else None
+
+    # ── 8. Compute EV/EBITDA from scraped components ─────────────────────────
+    # EV  = Market Cap + Borrowings  (simplified: ignores cash)
+    # EBITDA = Operating Profit (gross_profit field, which = Sales - Expenses)
+    market_cap   = data.get("market_cap")       # crores
+    borrowings   = data.get("long_term_debt")   # crores (from balance sheet)
+    ebitda       = data.get("gross_profit")     # crores (Operating Profit from P&L)
+    if market_cap and ebitda and ebitda > 0:
+        ev = market_cap + (borrowings or 0)
+        data["ev_ebitda"] = round(ev / ebitda, 2)
 
     return data if len(data) > 2 else None
 
@@ -287,7 +345,7 @@ def _safe_float(text: str) -> float | None:
 def _parse_screener_table(table) -> dict:
     """
     Parse a Screener.in financial table into a dict of {row_label: [values]}.
-    Screener.in tables have row labels in <td> and annual values in subsequent <td>s.
+    Trailing '+' is stripped from labels (Screener.in uses it as an expand marker).
     """
     result = {}
     rows = table.find_all("tr")
@@ -295,7 +353,7 @@ def _parse_screener_table(table) -> dict:
         cols = row.find_all("td")
         if len(cols) < 2:
             continue
-        label = cols[0].get_text(strip=True)
+        label = cols[0].get_text(strip=True).rstrip("+").strip()
         values = []
         for col in cols[1:]:
             val = _safe_float(col.get_text(strip=True).replace(",", ""))

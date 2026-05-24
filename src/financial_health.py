@@ -57,10 +57,22 @@ def compute_piotroski_fscore(financials: dict) -> dict:
     score = 0
     breakdown = {}
 
+    # Normalise: replace None with 0 so missing data scores 0, not a crash
+    _NUMERIC_KEYS = [
+        "net_income", "net_income_prev", "total_assets", "total_assets_prev",
+        "operating_cash_flow", "long_term_debt", "long_term_debt_prev",
+        "current_assets", "current_assets_prev", "current_liabilities",
+        "current_liabilities_prev", "shares_outstanding", "shares_outstanding_prev",
+        "gross_profit", "gross_profit_prev", "revenue", "revenue_prev",
+        "ebit", "working_capital", "retained_earnings", "book_value_equity",
+        "total_liabilities",
+    ]
+    financials = {k: (financials.get(k) or 0) for k in _NUMERIC_KEYS}
+
     # ── A. PROFITABILITY ──────────────────────────────────────────────────────
 
     # A1. ROA > 0 (Return on Assets is positive this year)
-    roa = financials.get("net_income", 0) / max(financials.get("total_assets", 1), 1)
+    roa = (financials.get("net_income") or 0) / max(financials.get("total_assets") or 1, 1)
     a1 = 1 if roa > 0 else 0
     breakdown["A1_roa_positive"] = a1
     score += a1
@@ -71,7 +83,7 @@ def compute_piotroski_fscore(financials: dict) -> dict:
     score += a2
 
     # A3. ROA improved vs last year
-    roa_prev = financials.get("net_income_prev", 0) / max(financials.get("total_assets_prev", 1), 1)
+    roa_prev = (financials.get("net_income_prev") or 0) / max(financials.get("total_assets_prev") or 1, 1)
     a3 = 1 if roa > roa_prev else 0
     breakdown["A3_roa_improved"] = a3
     score += a3
@@ -84,22 +96,22 @@ def compute_piotroski_fscore(financials: dict) -> dict:
     # ── B. LEVERAGE / LIQUIDITY ───────────────────────────────────────────────
 
     # B5. Long-term debt ratio decreased vs last year
-    debt_ratio_now = financials.get("long_term_debt", 0) / max(financials.get("total_assets", 1), 1)
-    debt_ratio_prev = financials.get("long_term_debt_prev", 0) / max(financials.get("total_assets_prev", 1), 1)
+    debt_ratio_now = (financials.get("long_term_debt") or 0) / max(financials.get("total_assets") or 1, 1)
+    debt_ratio_prev = (financials.get("long_term_debt_prev") or 0) / max(financials.get("total_assets_prev") or 1, 1)
     b5 = 1 if debt_ratio_now < debt_ratio_prev else 0
     breakdown["B5_leverage_reduced"] = b5
     score += b5
 
     # B6. Current ratio (current assets / current liabilities) improved
-    cr_now = financials.get("current_assets", 0) / max(financials.get("current_liabilities", 1), 1)
-    cr_prev = financials.get("current_assets_prev", 0) / max(financials.get("current_liabilities_prev", 1), 1)
+    cr_now = (financials.get("current_assets") or 0) / max(financials.get("current_liabilities") or 1, 1)
+    cr_prev = (financials.get("current_assets_prev") or 0) / max(financials.get("current_liabilities_prev") or 1, 1)
     b6 = 1 if cr_now > cr_prev else 0
     breakdown["B6_liquidity_improved"] = b6
     score += b6
 
     # B7. No new shares issued (dilution check)
-    shares_now = financials.get("shares_outstanding", 1)
-    shares_prev = financials.get("shares_outstanding_prev", 1)
+    shares_now = financials.get("shares_outstanding") or 1
+    shares_prev = financials.get("shares_outstanding_prev") or 1
     b7 = 1 if shares_now <= shares_prev else 0
     breakdown["B7_no_dilution"] = b7
     score += b7
@@ -107,15 +119,15 @@ def compute_piotroski_fscore(financials: dict) -> dict:
     # ── C. OPERATING EFFICIENCY ───────────────────────────────────────────────
 
     # C8. Gross margin improved vs last year
-    gm_now = financials.get("gross_profit", 0) / max(financials.get("revenue", 1), 1)
-    gm_prev = financials.get("gross_profit_prev", 0) / max(financials.get("revenue_prev", 1), 1)
+    gm_now = (financials.get("gross_profit") or 0) / max(financials.get("revenue") or 1, 1)
+    gm_prev = (financials.get("gross_profit_prev") or 0) / max(financials.get("revenue_prev") or 1, 1)
     c8 = 1 if gm_now > gm_prev else 0
     breakdown["C8_margin_improved"] = c8
     score += c8
 
     # C9. Asset turnover improved (revenue / total assets)
-    at_now = financials.get("revenue", 0) / max(financials.get("total_assets", 1), 1)
-    at_prev = financials.get("revenue_prev", 0) / max(financials.get("total_assets_prev", 1), 1)
+    at_now = (financials.get("revenue") or 0) / max(financials.get("total_assets") or 1, 1)
+    at_prev = (financials.get("revenue_prev") or 0) / max(financials.get("total_assets_prev") or 1, 1)
     c9 = 1 if at_now > at_prev else 0
     breakdown["C9_asset_turnover_improved"] = c9
     score += c9
@@ -222,25 +234,19 @@ def compute_altman_zscore(financials: dict, sector: str = "") -> dict:
             )
         }
 
-    ta = max(financials.get("total_assets", 1), 1)
+    ta = max(financials.get("total_assets") or 1, 1)
 
     # X1: Working Capital / Total Assets
-    # Measures: short-term liquidity buffer relative to total assets
-    x1 = financials.get("working_capital", 0) / ta
+    x1 = (financials.get("working_capital") or 0) / ta
 
     # X2: Retained Earnings / Total Assets
-    # Measures: cumulative lifetime profitability. Companies that have
-    # self-funded growth for years score high. Young or loss-making companies score low.
-    x2 = financials.get("retained_earnings", 0) / ta
+    x2 = (financials.get("retained_earnings") or 0) / ta
 
-    # X3: EBIT / Total Assets (same as ROA before tax and interest)
-    # Measures: core operating profitability of the asset base
-    x3 = financials.get("ebit", 0) / ta
+    # X3: EBIT / Total Assets
+    x3 = (financials.get("ebit") or 0) / ta
 
     # X4: Book Value of Equity / Total Liabilities
-    # (Z'' uses BOOK value — not market cap — for stability)
-    # Measures: how much the asset base can decline before liabilities > assets
-    x4 = financials.get("book_value_equity", 0) / max(financials.get("total_liabilities", 1), 1)
+    x4 = (financials.get("book_value_equity") or 0) / max(financials.get("total_liabilities") or 1, 1)
 
     # Z'' formula — Altman, Hartzell & Peck (1995)
     z_prime_prime = 6.56*x1 + 3.26*x2 + 6.72*x3 + 1.05*x4

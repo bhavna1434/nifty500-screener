@@ -104,16 +104,27 @@ def compute_value_score(fundamentals_df: pd.DataFrame) -> pd.Series:
     """
     df = fundamentals_df.copy().set_index("ticker")
 
-    # Drop stocks with missing or negative valuation metrics
-    df = df[(df["pe_ratio"] > 0) & (df["ev_ebitda"] > 0)].copy()
+    # Fill missing ev_ebitda with NaN so we can average available metrics
+    if "ev_ebitda" not in df.columns:
+        df["ev_ebitda"] = float("nan")
+    else:
+        df["ev_ebitda"] = pd.to_numeric(df["ev_ebitda"], errors="coerce")
+    df["pe_ratio"] = pd.to_numeric(df["pe_ratio"], errors="coerce")
 
-    # Winsorise at 2nd–98th percentile
+    # Keep stocks with at least a valid, positive P/E
+    df = df[df["pe_ratio"] > 0].copy()
+    if df.empty:
+        return pd.Series(dtype=float)
+
+    # Winsorise each metric independently at 2nd–98th percentile
     for col in ["pe_ratio", "ev_ebitda"]:
-        lo, hi = df[col].quantile(0.02), df[col].quantile(0.98)
-        df[col] = df[col].clip(lo, hi)
+        valid = df[col].dropna()
+        if len(valid) >= 4:
+            lo, hi = valid.quantile(0.02), valid.quantile(0.98)
+            df[col] = df[col].clip(lo, hi)
 
-    # Average the two metrics, then flip sign (cheaper = higher score)
-    raw = (df["pe_ratio"] + df["ev_ebitda"]) / 2
+    # Average whichever metrics are available per stock
+    raw = df[["pe_ratio", "ev_ebitda"]].mean(axis=1, skipna=True)
     return -z_score(raw)   # negative sign: low valuation → high z-score
 
 

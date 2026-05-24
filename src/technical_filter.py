@@ -44,7 +44,8 @@ def compute_52w_proximity(prices: pd.Series) -> float:
     Calculate how far the current price is from the 52-week high (as a %).
     0% = at the 52-week high. 20% = 20% below the 52-week high.
     """
-    high_52w = prices.rolling(252).max().iloc[-1]  # 252 trading days ≈ 1 year
+    lookback = min(252, len(prices))
+    high_52w = prices.iloc[-lookback:].max()
     current = prices.iloc[-1]
     return ((high_52w - current) / high_52w) * 100
 
@@ -67,18 +68,19 @@ def apply_green_flag_filter(top_stocks: list, price_df: pd.DataFrame) -> pd.Data
             continue
 
         prices = price_df[ticker].dropna()
-        if len(prices) < 252:
-            continue  # need at least a year of data
+        if len(prices) < 50:
+            continue  # need at least enough data for MA50 and RSI
 
         rsi = compute_rsi(prices)
         ma50 = compute_ma(prices, window=50)
         current_price = prices.iloc[-1]
+        above_ma50 = current_price >= ma50
         pct_from_high = compute_52w_proximity(prices)
 
         # Check all Green-Flag conditions
         passes = (
             rsi <= TECH_RULES["rsi_max"]
-            and current_price >= ma50
+            and above_ma50
             and pct_from_high <= TECH_RULES["pct_from_52w_high_max"]
         )
 
@@ -87,9 +89,10 @@ def apply_green_flag_filter(top_stocks: list, price_df: pd.DataFrame) -> pd.Data
             "current_price": round(current_price, 2),
             "rsi": round(rsi, 1),
             "ma_50": round(ma50, 2),
+            "above_ma50": above_ma50,
             "pct_from_52w_high": round(pct_from_high, 1),
-            "green_flag": passes,
+            "passes": passes,
         })
 
     df = pd.DataFrame(results)
-    return df[df["green_flag"] == True].reset_index(drop=True)
+    return df.reset_index(drop=True)
