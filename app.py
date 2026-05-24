@@ -5,6 +5,8 @@
 import streamlit as st
 import pandas as pd
 import yfinance as yf
+from datetime import datetime, timedelta
+from pathlib import Path
 
 st.set_page_config(
     page_title="Nifty 500 Screener",
@@ -14,9 +16,58 @@ st.set_page_config(
 
 from src.data_loader import load_nifty500_list
 from src.regime_detector import get_current_regime
-from src.fundamental_filter import apply_red_flag_filter
+from src.fundamental_filter import apply_red_flag_filter, fetch_fundamentals
 from src.factor_model import rank_stocks
 from src.technical_filter import apply_green_flag_filter
+from src.history_tracker import init_database, save_run, render_history_section, get_stock_history
+from src.visualizations import (
+    plot_correlation_heatmap,
+    plot_factor_attribution,
+    plot_regime_gauge,
+    plot_factor_radar,
+    plot_rank_history,
+)
+
+init_database()
+
+CACHE_PATH   = Path("data/fundamentals_cache.csv")
+CACHE_MAX_AGE_DAYS = 7
+
+
+def load_nifty500_df(filepath: str = "data/nifty500_list.csv") -> pd.DataFrame:
+    """Return the full CSV with Company Name, Industry, Symbol columns."""
+    return pd.read_csv(filepath)
+
+
+def build_sector_map(nifty_df: pd.DataFrame) -> dict:
+    """Build {ticker: industry} dict from the CSV's Symbol and Industry columns."""
+    return dict(zip(nifty_df["Symbol"], nifty_df["Industry"]))
+
+
+def load_fundamentals_cache() -> pd.DataFrame | None:
+    """Return cached fundamentals if file exists and is < 7 days old, else None."""
+    if not CACHE_PATH.exists():
+        return None
+    age = datetime.now() - datetime.fromtimestamp(CACHE_PATH.stat().st_mtime)
+    if age > timedelta(days=CACHE_MAX_AGE_DAYS):
+        return None
+    return pd.read_csv(CACHE_PATH)
+
+
+def scrape_and_cache_fundamentals(tickers: list, sector_map: dict,
+                                   progress_bar) -> tuple[list, pd.DataFrame, pd.DataFrame]:
+    """
+    Scrape fundamentals for all tickers, updating a Streamlit progress bar.
+    Saves results to cache after completion.
+    Returns (passing, rejected_df, fundamentals_df).
+    """
+    from src.fundamental_filter import apply_red_flag_filter
+    passing, rejected_df, fundamentals_df = apply_red_flag_filter(
+        tickers, sector_map=sector_map, verbose=False
+    )
+    if not fundamentals_df.empty:
+        fundamentals_df.to_csv(CACHE_PATH, index=False)
+    return passing, rejected_df, fundamentals_df
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -61,7 +112,26 @@ with st.sidebar:
     st.divider()
 
     run_clicked = st.button("▶ Run Screener", type="primary", use_container_width=True)
-    st.caption("Scans first 50 tickers · ~2–3 min")
+    cache_exists = CACHE_PATH.exists()
+    cache_age    = (
+        datetime.now() - datetime.fromtimestamp(CACHE_PATH.stat().st_mtime)
+        if cache_exists else None
+    )
+    if cache_exists and cache_age and cache_age <= timedelta(days=CACHE_MAX_AGE_DAYS):
+        st.caption(f"Cache: {cache_age.days}d {cache_age.seconds//3600}h old — run will be fast ⚡")
+    else:
+        st.caption("First run scrapes all 500 stocks (~15 min). Subsequent runs use cache.")
+
+
+# ── Regime (computed once per page load, stored so pipeline can use it) ──────
+try:
+    _regime_data = get_current_regime()
+    regime = _regime_data["regime"]
+    st.session_state["regime_data"] = _regime_data
+except Exception:
+    regime = "Neutral"
+    st.session_state["regime_data"] = {"regime": "Neutral", "nifty_data": {}, "breadth_pct": None}
+st.session_state["regime"] = regime
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -71,24 +141,40 @@ with st.sidebar:
 if run_clicked and weights:
     with st.spinner("Running screener pipeline…"):
 
-        # Stage 0 — load tickers
-        with st.spinner("Loading Nifty 500 ticker list…"):
-            all_tickers = load_nifty500_list()
-            universe_50 = all_tickers[:50]
+        # ── Stage 0: load tickers + sector map ───────────────────────────────
+        nifty_df    = load_nifty500_df()
+        all_tickers = nifty_df["Symbol"].tolist()
+        sector_map  = build_sector_map(nifty_df)
+        st.toast(f"Loaded {len(all_tickers)} tickers from CSV")
 
-        # Stage 1 — download price data
-        with st.spinner(f"Downloading 1y price data for {len(universe_50)} stocks…"):
-            tickers_ns = [t + ".NS" for t in universe_50]
-            raw = yf.download(tickers_ns, period="1y", progress=False, auto_adjust=True)["Close"]
+        # ── Stage 1: download price data for full universe ────────────────────
+        with st.spinner(f"Downloading 1y price data for {len(all_tickers)} stocks…"):
+            tickers_ns = [t + ".NS" for t in all_tickers]
+            raw = yf.download(
+                tickers_ns, period="1y", progress=False, auto_adjust=True
+            )["Close"]
             raw.columns = [c.replace(".NS", "") for c in raw.columns]
+            st.session_state["price_df"] = raw
 
-        # Stage 2 — fundamental red-flag filter
-        with st.spinner("Stage 2: Running fundamental red-flag filter (Screener.in)…"):
-            passing, rejected_df, fundamentals_df = apply_red_flag_filter(
-                universe_50, verbose=False
-            )
+        # ── Stage 2: fundamentals — use cache if fresh, else scrape ──────────
+        cached_df = load_fundamentals_cache()
+        if cached_df is not None:
+            st.toast("Using cached fundamentals ⚡ (< 7 days old)")
+            fundamentals_df = cached_df
+            # Re-apply filter logic using cached data to get passing list
+            passing = fundamentals_df["ticker"].tolist() if not fundamentals_df.empty else []
+            rejected_df = pd.DataFrame()
+        else:
+            with st.spinner(
+                f"Stage 2: Scraping fundamentals for {len(all_tickers)} stocks from "
+                f"Screener.in… (first run — this takes ~15 min)"
+            ):
+                passing, rejected_df, fundamentals_df = scrape_and_cache_fundamentals(
+                    all_tickers, sector_map, progress_bar=None
+                )
+            st.toast(f"Scraped {len(all_tickers)} stocks — cache saved to data/fundamentals_cache.csv")
 
-        # Stage 3 — factor model ranking
+        # ── Stage 3: factor model ranking ─────────────────────────────────────
         if passing:
             with st.spinner(f"Stage 3: Ranking {len(passing)} stocks by factor model…"):
                 ranked_df = rank_stocks(
@@ -97,18 +183,18 @@ if run_clicked and weights:
                     fundamentals_df=fundamentals_df,
                     weights=weights,
                 )
-            top20 = ranked_df["ticker"].head(20).tolist()
+            top_n_tickers = ranked_df["ticker"].head(int(top_n)).tolist()
         else:
-            ranked_df = pd.DataFrame()
-            top20 = []
+            ranked_df     = pd.DataFrame()
+            top_n_tickers = []
 
-        # Stage 4 — technical green-flag filter
-        if top20:
+        # ── Stage 4: technical green-flag filter ──────────────────────────────
+        if top_n_tickers:
             with st.spinner("Stage 4: Applying technical green-flag filter…"):
-                tech_df = apply_green_flag_filter(top20, raw)
+                tech_df = apply_green_flag_filter(top_n_tickers, raw)
             final_picks = tech_df[tech_df["passes"]]["ticker"].tolist()
         else:
-            tech_df = pd.DataFrame()
+            tech_df     = pd.DataFrame()
             final_picks = []
 
         # Merge technical signals into ranked_df for display
@@ -123,7 +209,15 @@ if run_clicked and weights:
         st.session_state["tech_df"]        = tech_df
         st.session_state["final_picks"]    = final_picks
         st.session_state["passing_count"]  = len(passing)
-        st.session_state["universe_count"] = len(universe_50)
+        st.session_state["universe_count"] = len(all_tickers)
+
+        # Save run to history database
+        if not ranked_df.empty:
+            save_run(
+                ranked_df=ranked_df,
+                regime=st.session_state.get("regime", "Neutral"),
+                n_universe=len(all_tickers),
+            )
 
     st.success(f"Done! {len(final_picks)} stocks passed all 4 stages.")
 
@@ -139,11 +233,7 @@ st.caption("QVGS-style pipeline: Red-Flag filters → 5-Factor ranking → Techn
 col1, col2, col3, col4 = st.columns(4)
 
 with col1:
-    try:
-        regime_data  = get_current_regime()
-        regime       = regime_data["regime"]
-    except Exception:
-        regime = "Neutral"
+    regime = st.session_state.get("regime", "Neutral")
     regime_emoji = {"Risk-On": "🟢", "Neutral": "🟡", "Risk-Off": "🔴"}.get(regime, "🟡")
     st.metric("Market Regime", f"{regime_emoji} {regime}")
 
@@ -166,6 +256,16 @@ with col4:
         str(len(final_picks)) if final_picks is not None else "—",
         help=f"Top {top_n} after all 4 stages"
     )
+
+st.divider()
+
+# ── Regime gauge ──────────────────────────────────────────────────────────────
+_rd = st.session_state.get("regime_data", {})
+_nifty_pct = _rd.get("nifty_data", {}).get("pct_from_ma", 0.0) or 0.0
+st.plotly_chart(
+    plot_regime_gauge(regime, _nifty_pct),
+    use_container_width=True,
+)
 
 st.divider()
 
@@ -220,16 +320,34 @@ with tab1:
 # ── TAB 2: Factor Analysis ────────────────────────────────────────────────────
 with tab2:
     st.subheader("Factor Attribution")
-    st.info("🚧 Factor attribution chart — build in Week 8 (visualizations.py).")
+    if "ranked_df" in st.session_state and not st.session_state["ranked_df"].empty:
+        st.plotly_chart(
+            plot_factor_attribution(st.session_state["ranked_df"], top_n=15),
+            use_container_width=True,
+        )
+    else:
+        st.info("Run the screener to see factor attribution.")
+
     st.divider()
     st.subheader("Return Correlation Matrix")
-    st.info("🚧 Correlation heatmap — build in Week 7 (visualizations.py).")
+    if "ranked_df" in st.session_state and "price_df" in st.session_state:
+        _top15 = st.session_state["ranked_df"]["ticker"].tolist()[:15]
+        st.plotly_chart(
+            plot_correlation_heatmap(st.session_state["price_df"], _top15),
+            use_container_width=True,
+        )
+    else:
+        st.info("Run the screener to see correlation matrix.")
 
 
 # ── TAB 3: History & Changes ──────────────────────────────────────────────────
 with tab3:
     st.subheader("Week-over-Week Changes")
-    st.info("🚧 Screener history — build in Week 8 (history_tracker.py).")
+    st.caption("Which stocks entered and exited the top list since the last run?")
+    if "ranked_df" in st.session_state:
+        render_history_section(st.session_state["ranked_df"])
+    else:
+        st.info("Run the screener first to see history.")
 
 
 # ── TAB 4: Stock Deep-Dive ────────────────────────────────────────────────────
@@ -237,12 +355,32 @@ with tab4:
     st.subheader("Single Stock Analysis")
     search_ticker = st.text_input("Enter NSE ticker (e.g. RELIANCE, TCS, INFY)", value="RELIANCE")
     if search_ticker:
+        _tick = search_ticker.upper()
+        st.caption(f"Showing data for: **{_tick}**")
         col_l, col_r = st.columns(2)
         with col_l:
-            st.info("🚧 Factor radar chart — build in Week 9 (visualizations.py).")
+            _rdf = st.session_state.get("ranked_df")
+            if _rdf is not None and not _rdf.empty:
+                _row = _rdf[_rdf["ticker"] == _tick]
+                if not _row.empty:
+                    _scores = {
+                        "value":    float(_row["value_score"].iloc[0]),
+                        "growth":   float(_row["growth_score"].iloc[0]),
+                        "quality":  float(_row["quality_score"].iloc[0]),
+                        "momentum": float(_row["momentum_score"].iloc[0]),
+                        "surprise": float(_row["surprise_score"].iloc[0]),
+                    }
+                    st.plotly_chart(plot_factor_radar(_tick, _scores), use_container_width=True)
+                else:
+                    st.info(f"{_tick} not in current screener results.")
+            else:
+                st.info("Run the screener to see the factor profile.")
         with col_r:
-            st.info("🚧 Rank history chart — build in Week 9 (history_tracker.py).")
-        st.caption(f"Showing data for: **{search_ticker.upper()}**")
+            _hist = get_stock_history(_tick)
+            if not _hist.empty:
+                st.plotly_chart(plot_rank_history(_tick, _hist), use_container_width=True)
+            else:
+                st.info(f"No history yet for {_tick}. Run the screener to record it.")
 
 
 # ── Footer ────────────────────────────────────────────────────────────────────

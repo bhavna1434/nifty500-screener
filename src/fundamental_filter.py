@@ -171,7 +171,7 @@ def fetch_fundamentals(ticker: str) -> dict | None:
 
             if "debtor days" in label:
                 pass  # skip
-            elif "debt / equity" in label or "d/e" in label:
+            elif any(x in label for x in ("debt / equity", "debt to equity", "d/e ratio", "d/e")):
                 data["debt_equity"] = val
             elif "interest coverage" in label or "int. coverage" in label:
                 data["interest_coverage"] = val
@@ -318,7 +318,14 @@ def fetch_fundamentals(ticker: str) -> dict | None:
                 vals = cf_data[cf_key]
                 data["operating_cash_flow"] = vals[-1] if vals else None
 
-    # ── 8. Compute EV/EBITDA from scraped components ─────────────────────────
+    # ── 8. Fallback: compute D/E from balance sheet if not scraped directly ──
+    if not data.get("debt_equity"):
+        debt  = data.get("long_term_debt")   or 0
+        equity = data.get("book_value_equity")
+        if equity and equity > 0:
+            data["debt_equity"] = round(debt / equity, 2)
+
+    # ── 9. Compute EV/EBITDA from scraped components ─────────────────────────
     # EV  = Market Cap + Borrowings  (simplified: ignores cash)
     # EBITDA = Operating Profit (gross_profit field, which = Sales - Expenses)
     market_cap   = data.get("market_cap")       # crores
