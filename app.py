@@ -36,6 +36,15 @@ CACHE_MAX_AGE_DAYS = 7
 
 def load_nifty500_df(filepath: str = "data/nifty500_list.csv") -> pd.DataFrame:
     """Return the full CSV with Company Name, Industry, Symbol columns."""
+    path = Path(filepath)
+    if not path.exists():
+        st.error(
+            f"**Missing file: `{filepath}`**\n\n"
+            "The Nifty 500 constituent list is required to run the screener. "
+            "Please add `data/nifty500_list.csv` to the repository and redeploy. "
+            "Download it from: NSE India → Indices → Nifty 500 → Download."
+        )
+        st.stop()
     return pd.read_csv(filepath)
 
 
