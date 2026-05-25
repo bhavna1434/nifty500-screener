@@ -95,8 +95,8 @@ streamlit run app.py
 
 - **Scraper fragility:** The Screener.in scraper will break if the site changes its HTML structure. It is not production-grade — for a live system, replace with Trendlyne Pro or a Bloomberg terminal feed.
 - **EPS momentum ≠ PEAD:** The 5th factor measures quarter-over-quarter EPS change, not surprise vs analyst consensus. True PEAD requires paid analyst estimates (Bloomberg, Refinitiv). This is EPS acceleration, not the classical Ball & Brown anomaly.
-- **Backtest is price-momentum only:** Historical fundamental data (Piotroski, Altman scores by year) is not freely available. The backtest is a single-factor momentum simulation and should not be read as a forecast of the full model's live performance.
-- **Survivorship bias:** The Nifty 500 constituent list used is current. Stocks delisted or dropped from the index between 2019–2024 are absent from the backtest universe, which mechanically inflates simulated returns.
+- **Backtest covers 2019–2024 using momentum factor only; multi-factor backtest not yet implemented.** Results are illustrative, not predictive.
+- **No survivorship bias correction** — the Nifty 500 universe used is the current list, which excludes stocks that were delisted or removed during the test period. This likely overstates historical returns.
 
 ---
 
