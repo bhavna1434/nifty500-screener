@@ -193,7 +193,7 @@ def generate_methodology_pdf(output_path: str = "data/Nifty500_Methodology.pdf")
     pdf.set_font("Helvetica", "", 7)
     _set(pdf, *MID_GREY)
     pdf.cell(COL_W / 2, 4, "Bhavna Sharma  -  bhavnasharma.1404@gmail.com", align="L")
-    pdf.cell(COL_W / 2, 4, "github.com/bhavna1434/nifty500-screener", align="R")
+    pdf.cell(COL_W / 2, 4, "github.com/bhavna1434/Quantamental-nifty500-screener", align="R")
 
     pdf.output(output_path)
     print(f"Methodology PDF saved: {output_path}")

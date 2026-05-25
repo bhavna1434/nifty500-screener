@@ -60,8 +60,8 @@ def init_database():
             growth_score    REAL,
             quality_score   REAL,
             momentum_score  REAL,
-            surprise_score  REAL,
-            piotroski       INTEGER,
+            eps_momentum_score  REAL,
+            piotroski           INTEGER,
             altman_zone     TEXT
         )
     """)
@@ -82,7 +82,7 @@ def save_run(ranked_df: pd.DataFrame, regime: str, n_universe: int) -> int:
     Args:
         ranked_df: DataFrame with top-ranked stocks (output of factor_model.rank_stocks)
                    Expected columns: ticker, rank, composite_score, value_score,
-                   growth_score, quality_score, momentum_score, surprise_score,
+                   growth_score, quality_score, momentum_score, eps_momentum_score,
                    piotroski, altman_zone
         regime: Current market regime string (e.g. "Risk-On")
         n_universe: Total stocks before Red-Flag filtering
@@ -110,7 +110,7 @@ def save_run(ranked_df: pd.DataFrame, regime: str, n_universe: int) -> int:
         cursor.execute("""
             INSERT INTO top_stocks
             (run_id, ticker, rank, composite_score, value_score, growth_score,
-             quality_score, momentum_score, surprise_score, piotroski, altman_zone)
+             quality_score, momentum_score, eps_momentum_score, piotroski, altman_zone)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             run_id,
@@ -121,7 +121,7 @@ def save_run(ranked_df: pd.DataFrame, regime: str, n_universe: int) -> int:
             row.get("growth_score"),
             row.get("quality_score"),
             row.get("momentum_score"),
-            row.get("surprise_score"),
+            row.get("eps_momentum_score"),
             row.get("piotroski"),
             row.get("altman_zone"),
         ))
@@ -221,7 +221,7 @@ def get_stock_history(ticker: str) -> pd.DataFrame:
     df = pd.read_sql_query("""
         SELECT sr.run_date, ts.rank, ts.composite_score,
                ts.value_score, ts.growth_score, ts.quality_score,
-               ts.momentum_score, ts.surprise_score
+               ts.momentum_score, ts.eps_momentum_score
         FROM top_stocks ts
         JOIN screener_runs sr ON ts.run_id = sr.run_id
         WHERE ts.ticker = ?
@@ -293,7 +293,7 @@ _CSV_COLS = [
     "run_date", "regime", "universe_size",
     "ticker", "rank", "composite_score",
     "value_score", "growth_score", "quality_score",
-    "momentum_score", "surprise_score",
+    "momentum_score", "eps_momentum_score",
 ]
 
 
@@ -321,7 +321,7 @@ def export_history_to_csv():
             ts.growth_score,
             ts.quality_score,
             ts.momentum_score,
-            ts.surprise_score
+            ts.eps_momentum_score
         FROM top_stocks ts
         JOIN screener_runs sr ON ts.run_id = sr.run_id
         ORDER BY sr.run_date DESC, ts.rank ASC
@@ -379,7 +379,7 @@ def import_history_from_csv():
                 INSERT INTO top_stocks
                     (run_id, ticker, rank, composite_score,
                      value_score, growth_score, quality_score,
-                     momentum_score, surprise_score)
+                     momentum_score, eps_momentum_score)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 run_id,
@@ -390,7 +390,7 @@ def import_history_from_csv():
                 row.get("growth_score"),
                 row.get("quality_score"),
                 row.get("momentum_score"),
-                row.get("surprise_score"),
+                row.get("eps_momentum_score"),
             ))
             imported_stocks += 1
         imported_runs += 1
@@ -408,13 +408,13 @@ if __name__ == "__main__":
     dummy_df = pd.DataFrame([
         {"ticker": "RELIANCE", "rank": 1, "composite_score": 1.8, "value_score": 1.2,
          "growth_score": 2.1, "quality_score": 1.5, "momentum_score": 2.3,
-         "surprise_score": 1.1, "piotroski": 7, "altman_zone": "Safe"},
+         "eps_momentum_score": 1.1, "piotroski": 7, "altman_zone": "Safe"},
         {"ticker": "TCS", "rank": 2, "composite_score": 1.6, "value_score": 0.9,
          "growth_score": 1.8, "quality_score": 2.0, "momentum_score": 1.4,
-         "surprise_score": 1.8, "piotroski": 8, "altman_zone": "Safe"},
+         "eps_momentum_score": 1.8, "piotroski": 8, "altman_zone": "Safe"},
         {"ticker": "HDFCBANK", "rank": 3, "composite_score": 1.4, "value_score": 1.5,
          "growth_score": 1.2, "quality_score": 1.8, "momentum_score": 0.9,
-         "surprise_score": 0.5, "piotroski": 6, "altman_zone": "Safe"},
+         "eps_momentum_score": 0.5, "piotroski": 6, "altman_zone": "Safe"},
     ])
 
     run_id = save_run(dummy_df, regime="Risk-On", n_universe=500)
